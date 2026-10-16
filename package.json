@@ -1,0 +1,21 @@
+{
+  "name": "dietdiary-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "饮食记录 App 的社交功能后端（Express + Turso/libSQL），可免费部署到 Render",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,167 @@
+// server/src/db.js
+// Turso（libSQL）客户端初始化 + 建表兜底。
+//
+// 环境变量：
+//   TURSO_DATABASE_URL  libsql://xxx.turso.io   取法：turso db show <db> --url
+//   TURSO_AUTH_TOKEN    eyJ...                  取法：turso db tokens create <db>
+// 两者都缺省时退化成本地文件库 file:./local.db，方便本机开发；
+// 但 Render 免费实例的磁盘是临时的、重启即清空，线上必须配 Turso。
+
+import { createClient } from '@libsql/client';
+
+const rawUrl = (process.env.TURSO_DATABASE_URL || '').trim();
+const authToken = (process.env.TURSO_AUTH_TOKEN || '').trim();
+
+let url = rawUrl;
+if (!url) {
+  url = 'file:./local.db';
+  console.warn('[db] 未设置 TURSO_DATABASE_URL，退化为本地文件数据库 file:./local.db（仅供本地开发）');
+} else if (url.startsWith('http://') || url.startsWith('https://')) {
+  // Turso 控制台有时给的是 https:// 形式，转成 libsql:// 让 SDK 走正确的协议
+  url = url.replace(/^https?:\/\//, 'libsql://');
+}
+
+export const db = createClient(
+  authToken ? { url, authToken } : { url }
+);
+
+export const dbUrl = url;
+
+// 与 schema.sql 完全一致的建表语句，进程启动时执行一遍，保证表一定存在。
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL UNIQUE,
+    display_name  TEXT    NOT NULL,
+    password_hash TEXT    NOT NULL,
+    avatar_color  TEXT    NOT NULL DEFAULT '#FF8A65',
+    goal_text     TEXT    NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT    PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+  `CREATE TABLE IF NOT EXISTS friendships (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status       TEXT    NOT NULL DEFAULT 'pending',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    UNIQUE (requester_id, addressee_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships(requester_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON friendships(addressee_id, status)`,
+  `CREATE TABLE IF NOT EXISTS posts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date        TEXT    NOT NULL,
+    goal_text   TEXT    NOT NULL DEFAULT '',
+    meals_json  TEXT    NOT NULL DEFAULT '{}',
+    totals_json TEXT    NOT NULL DEFAULT '{}',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_user_date ON posts(user_id, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date)`,
+  `CREATE TABLE IF NOT EXISTS likes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    UNIQUE (post_id, user_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id)`,
+  `CREATE TABLE IF NOT EXISTS comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)`,
+  `CREATE TABLE IF NOT EXISTS cheers (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    to_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    post_id      INTEGER,
+    date         TEXT    NOT NULL DEFAULT '',
+    message      TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cheers_to ON cheers(to_user_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_cheers_from ON cheers(from_user_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS app_versions (
+    platform      TEXT    NOT NULL,
+    version_code  INTEGER NOT NULL,
+    version_name  TEXT    NOT NULL,
+    url           TEXT    NOT NULL DEFAULT '',
+    notes         TEXT    NOT NULL DEFAULT '',
+    force         INTEGER NOT NULL DEFAULT 0,
+    min_supported INTEGER NOT NULL DEFAULT 1,
+    updated_at    INTEGER NOT NULL,
+    PRIMARY KEY (platform)
+  )`
+];
+
+let initPromise = null;
+
+/** 确保所有表都存在；进程内只会真正执行一次，失败可重试。 */
+export function initDb() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      for (const sql of SCHEMA_STATEMENTS) {
+        await db.execute(sql);
+      }
+      // libSQL 默认外键级联是关闭的，本地/远端都显式打开（失败不影响主流程）
+      try {
+        await db.execute('PRAGMA foreign_keys = ON');
+      } catch (err) {
+        console.warn('[db] PRAGMA foreign_keys 设置失败（可忽略）:', err.message);
+      }
+      console.log(`[db] schema 就绪 -> ${url}`);
+    })().catch((err) => {
+      initPromise = null; // 允许下一个请求重试
+      throw err;
+    });
+  }
+  return initPromise;
+}
+
+/**
+ * 查询封装。
+ * @param {string} sql 带 ? 占位符的参数化 SQL
+ * @param {Array<any>} args 参数
+ * @returns {Promise<Array<object>>} 行数组（普通对象）
+ */
+export async function all(sql, args = []) {
+  const result = await db.execute({ sql, args });
+  return result.rows;
+}
+
+/** 查询单行，没有则返回 null。 */
+export async function get(sql, args = []) {
+  const rows = await all(sql, args);
+  return rows.length ? rows[0] : null;
+}
+
+/**
+ * 写操作（INSERT / UPDATE / DELETE）。
+ * @returns {Promise<{changes:number,lastInsertRowid:number}>} lastInsertRowid 是 Number
+ */
+export async function run(sql, args = []) {
+  const result = await db.execute({ sql, args });
+  return {
+    changes: Number(result.rowsAffected ?? 0),
+    lastInsertRowid: Number(result.lastInsertRowid ?? 0)
+  };
+}
+
+/** 一次事务写多条（批量动态等场景）。传 [{sql, args}]。 */
+export async function batch(statements) {
+  return db.batch(statements, 'write');
+}

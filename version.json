@@ -1,0 +1,15 @@
+{
+  "_comment": "App 更新清单示例。运行时 /api/version 优先读 Turso 的 app_versions 表；表里没有 platform=android 的行时，才回退到这里的示例值 + 环境变量 APK_*。要发布新版本，请写 app_versions 表（见 README『发布新版本』）。",
+  "android": {
+    "versionCode": 1,
+    "versionName": "0.1.0",
+    "url": "https://github.com/yourname/dietdiary/releases/download/v0.1.0/dietdiary-0.1.0.apk",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 49965,
+    "notes": "首个内测版",
+    "force": false,
+    "minSupported": 1,
+    "publishedAt": "2026-10-16T00:00:00Z",
+    "channel": "stable"
+  }
+}
