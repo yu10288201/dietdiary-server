@@ -474,6 +474,38 @@ app.put('/api/diary', requireAuth, h(async (req, res) => {
   res.json({ ok: true, saved: saved.length, dates: saved });
 }));
 
+/* 身体档案 + 体重记录：一人一份，整块 JSON 存。
+   跟 diary 一样按 updated_at 取新的 —— 两台设备来回推不会把新数据盖回旧的，
+   手机离线也能改，联网后补推。 */
+const PROFILE_MAX_BYTES = 64 * 1024;
+
+app.get('/api/profile', requireAuth, h(async (req, res) => {
+  const row = await get('SELECT data_json, updated_at FROM user_profile WHERE user_id = ?', [req.user.id]);
+  if (!row) return res.json({ ok: true, data: null, updatedAt: 0 });
+  let data = {};
+  try { data = JSON.parse(row.data_json); } catch { data = {}; }
+  res.json({ ok: true, data, updatedAt: Number(row.updated_at) });
+}));
+
+app.put('/api/profile', requireAuth, h(async (req, res) => {
+  const body = req.body || {};
+  const data = body.data && typeof body.data === 'object' ? body.data : null;
+  if (!data) throw new HttpError(400, 'data 不能为空');
+  const json = JSON.stringify(data);
+  if (json.length > PROFILE_MAX_BYTES) throw new HttpError(413, '身体档案太大了（上限 64 KB）');
+  const updatedAt = Math.trunc(num(body.updatedAt)) || Date.now();
+  await run(
+    `INSERT INTO user_profile (user_id, data_json, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       data_json  = excluded.data_json,
+       updated_at = excluded.updated_at
+     WHERE excluded.updated_at >= user_profile.updated_at`,
+    [req.user.id, json, updatedAt]
+  );
+  res.json({ ok: true, updatedAt });
+}));
+
 // 按短号查人（加好友前先看一眼是谁）
 app.get('/api/users/by-uid/:uid', requireAuth, h(async (req, res) => {
   const user = await findUserByUid(req.params.uid);

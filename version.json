@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  101,
-                    "versionName":  "0.5.0",
+                    "versionCode":  102,
+                    "versionName":  "0.5.1",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "总览改名；自定义食物每格都有固定标签、热量自动按 4/4/9 算；我的页新增身体档案（米夫林-斯蒂尔杰尔算目标）和体重记录曲线；今日页改成四个圆圈；主题色精简到 6 套",
+                    "notes":  "身体档案和体重也上云了：换手机登录同一账号，身高体重、目标和体重曲线都跟着回来",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-17T03:33:59Z",
+                    "publishedAt":  "2026-10-17T03:38:57Z",
                     "channel":  "stable",
-                    "sha256":  "2e1f79847ae7f431c4405b5782fdaf5c3cc2276cd6152f6c5380b3abd0cef7cb",
+                    "sha256":  "0ad3fcb20639c744161b16e14b7b9cc5e6be40c798f5e8fd0c051f946acebc52",
                     "size":  91059
                 }
 }

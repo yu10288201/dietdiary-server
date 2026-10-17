@@ -109,6 +109,12 @@ const SCHEMA_STATEMENTS = [
     PRIMARY KEY (user_id, date)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary(user_id, date)`,
+  // 身体档案（身高体重/目标）和体重记录：一人一份，整块 JSON 存，按 updated_at 取新的
+  `CREATE TABLE IF NOT EXISTS user_profile (
+    user_id    INTEGER NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    data_json  TEXT    NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS app_versions (
     platform      TEXT    NOT NULL,
     version_code  INTEGER NOT NULL,
