@@ -15,8 +15,12 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT    NOT NULL,                 -- scrypt: scrypt$N$r$p$saltB64$hashB64
   avatar_color  TEXT    NOT NULL DEFAULT '#FF8A65',
   goal_text     TEXT    NOT NULL DEFAULT '',      -- 个人目标（展示在动态卡片上）
+  uid           TEXT,                             -- 6 位永久短号（如 7F3K2M），社交用它加好友
   created_at    INTEGER NOT NULL
 );
+-- 老库升级：把短号列补上（已存在时报 duplicate column name，忽略即可）
+ALTER TABLE users ADD COLUMN uid TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uid ON users(uid);
 
 -- 会话（随机 token 直接存库，服务端可随时作废）
 CREATE TABLE IF NOT EXISTS sessions (
@@ -75,8 +79,18 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
 
--- 催更（给好友发一条提醒）
-CREATE TABLE IF NOT EXISTS cheers (
+-- 饮食记录本体（一人一天一行）。posts 只是给好友看的「动态快照」，
+-- 换手机要能还原自己的记录，就必须有这张真正存数据的表。
+CREATE TABLE IF NOT EXISTS diary (
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date         TEXT    NOT NULL,                  -- YYYY-MM-DD
+  entries_json TEXT    NOT NULL DEFAULT '[]',     -- [{id,name,meal,grams,kcal,p,f,ch,ts,...}]
+  updated_at   INTEGER NOT NULL,                  -- 最后一次改动时间（毫秒）
+  PRIMARY KEY (user_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary(user_id, date);
+
+-- 催更（给好友发一条提醒）CREATE TABLE IF NOT EXISTS cheers (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   to_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

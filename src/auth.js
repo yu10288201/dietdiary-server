@@ -100,19 +100,86 @@ export async function cleanupExpiredSessions() {
 }
 
 export const USER_COLUMNS =
-  'id, username, display_name, avatar_color, goal_text, created_at';
+  'id, username, display_name, avatar_color, goal_text, uid, created_at';
 
 /** 把数据库行转成对外返回的 user 对象 */
 export function toPublicUser(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
+    uid: row.uid || '',
     username: row.username,
     displayName: row.display_name,
     avatarColor: row.avatar_color,
     goalText: row.goal_text,
     createdAt: Number(row.created_at)
   };
+}
+
+// 短号字母表：去掉 0/O/1/I/L 这些抄下来会看错的字符，剩 31 个，6 位约 8.8 亿种
+const UID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const UID_LENGTH = 6;
+
+/** 生成一个随机短号（不保证唯一，调用方负责查重） */
+export function randomUid() {
+  const bytes = crypto.randomBytes(UID_LENGTH);
+  let out = '';
+  for (let i = 0; i < UID_LENGTH; i++) out += UID_ALPHABET[bytes[i] % UID_ALPHABET.length];
+  return out;
+}
+
+/** 归一化用户输入的短号：去空格、去 #、转大写 */
+export function normalizeUid(value) {
+  return String(value ?? '').trim().replace(/^#/, '').toUpperCase();
+}
+
+export async function findUserByUid(uid) {
+  const v = normalizeUid(uid);
+  if (!v) return null;
+  return get(`SELECT ${USER_COLUMNS} FROM users WHERE uid = ?`, [v]);
+}
+
+/**
+ * 给用户分配一个没被占用的短号。已经有的直接返回（幂等）。
+ * 冲突概率极低，但真撞上了就换一个，最多试 12 次。
+ */
+export async function ensureUserUid(userId) {
+  const row = await get('SELECT uid FROM users WHERE id = ?', [Number(userId)]);
+  if (!row) return null;
+  if (row.uid) return row.uid;
+  for (let i = 0; i < 12; i++) {
+    const candidate = randomUid();
+    const taken = await get('SELECT 1 AS x FROM users WHERE uid = ?', [candidate]);
+    if (taken) continue;
+    try {
+      await run('UPDATE users SET uid = ? WHERE id = ? AND (uid IS NULL OR uid = \'\')', [
+        candidate,
+        Number(userId)
+      ]);
+    } catch {
+      continue; // 并发下被别的请求抢了，换下一个
+    }
+    const after = await get('SELECT uid FROM users WHERE id = ?', [Number(userId)]);
+    if (after && after.uid) return after.uid;
+  }
+  return null;
+}
+
+/**
+ * 启动时给历史用户补短号（老库没有这一列的值）。
+ * 只处理前 500 个，剩下的等他们下次登录时再补 —— 免费实例启动要快。
+ */
+export async function backfillUserUids(limit = 500) {
+  const rows = await all(
+    "SELECT id FROM users WHERE uid IS NULL OR uid = '' ORDER BY id LIMIT ?",
+    [Number(limit)]
+  );
+  let fixed = 0;
+  for (const row of rows) {
+    if (await ensureUserUid(Number(row.id))) fixed++;
+  }
+  if (fixed) console.log(`[auth] 补发短号 ${fixed} 个`);
+  return fixed;
 }
 
 export async function findUserByUsername(username) {
@@ -161,7 +228,7 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ error: '缺少登录凭证（Authorization: Bearer <token>）' });
     }
     const row = await get(
-      `SELECT s.token, s.expires_at, u.id, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at
+      `SELECT s.token, s.expires_at, u.id, u.username, u.display_name, u.avatar_color, u.goal_text, u.uid, u.created_at
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.token = ?`,
       [token]
@@ -187,7 +254,7 @@ export async function optionalAuth(req, _res, next) {
     const token = extractToken(req);
     if (token) {
       const row = await get(
-        `SELECT s.expires_at, u.id, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at
+        `SELECT s.expires_at, u.id, u.username, u.display_name, u.avatar_color, u.goal_text, u.uid, u.created_at
            FROM sessions s JOIN users u ON u.id = s.user_id
           WHERE s.token = ?`,
         [token]

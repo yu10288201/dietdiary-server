@@ -36,8 +36,12 @@ const SCHEMA_STATEMENTS = [
     password_hash TEXT    NOT NULL,
     avatar_color  TEXT    NOT NULL DEFAULT '#FF8A65',
     goal_text     TEXT    NOT NULL DEFAULT '',
+    uid           TEXT,
     created_at    INTEGER NOT NULL
   )`,
+  // 唯一短号（6 位）。老库建表语句里没有这列，靠下面的 ALTER 补；补不进就是已经存在。
+  `ALTER TABLE users ADD COLUMN uid TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uid ON users(uid)`,
   `CREATE TABLE IF NOT EXISTS sessions (
     token      TEXT    PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -95,6 +99,16 @@ const SCHEMA_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cheers_to ON cheers(to_user_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_cheers_from ON cheers(from_user_id, created_at)`,
+  // 饮食记录本体：一人一天一行。老版本只把当天记录当「动态」推给好友看，
+  // 没有回拉接口，换手机就丢；这张表才是真正存数据的地方。
+  `CREATE TABLE IF NOT EXISTS diary (
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date         TEXT    NOT NULL,
+    entries_json TEXT    NOT NULL DEFAULT '[]',
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (user_id, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary(user_id, date)`,
   `CREATE TABLE IF NOT EXISTS app_versions (
     platform      TEXT    NOT NULL,
     version_code  INTEGER NOT NULL,
@@ -115,7 +129,16 @@ export function initDb() {
   if (!initPromise) {
     initPromise = (async () => {
       for (const sql of SCHEMA_STATEMENTS) {
-        await db.execute(sql);
+        try {
+          await db.execute(sql);
+        } catch (err) {
+          // ALTER TABLE ... ADD COLUMN 在列已存在时会报 duplicate column name，
+          // 那是正常情况（老库升级一次后就不再需要），其它错误照旧抛出。
+          const msg = String(err?.message || '');
+          const isAddColumn = /^\s*ALTER\s+TABLE/i.test(sql);
+          if (isAddColumn && /duplicate column|already exists/i.test(msg)) continue;
+          throw err;
+        }
       }
       // libSQL 默认外键级联是关闭的，本地/远端都显式打开（失败不影响主流程）
       try {

@@ -11,13 +11,17 @@ import 'dotenv/config';
 
 import { all, get, initDb, run, dbUrl } from './db.js';
 import {
+  backfillUserUids,
   cleanupExpiredSessions,
   createSession,
   destroySession,
+  ensureUserUid,
   findUserById,
+  findUserByUid,
   findUserByUsername,
   hashPassword,
   mapUsersByIds,
+  normalizeUid,
   requireAuth,
   toPublicUser,
   verifyPassword
@@ -304,6 +308,8 @@ app.post('/api/auth/register', h(async (req, res) => {
   }
 
   const token = await createSession(userId);
+  // 注册即分配永久短号（社交加好友只认它，不认登录名）
+  await ensureUserUid(userId);
   const user = toPublicUser(await findUserById(userId));
   res.status(201).json({ token, user });
 }));
@@ -322,7 +328,10 @@ app.post('/api/auth/login', h(async (req, res) => {
   if (!row || !ok) throw new HttpError(401, '用户名或密码错误');
 
   const token = await createSession(Number(row.id));
-  res.json({ token, user: toPublicUser(row) });
+  // 老用户第一次在新版本上登录：补发短号（幂等，有就返回原来的）
+  if (!row.uid) await ensureUserUid(Number(row.id));
+  const fresh = await findUserById(Number(row.id));
+  res.json({ token, user: toPublicUser(fresh || row) });
 }));
 
 app.post('/api/auth/logout', requireAuth, h(async (req, res) => {
@@ -369,6 +378,104 @@ app.put('/api/me', requireAuth, h(async (req, res) => {
   res.json({ user: toPublicUser(await findUserById(req.user.id)) });
 }));
 
+// ------------------------------------------------------------ /api/diary
+//
+// 记录本体存服务器，一人一天一行。客户端策略：
+//   * 本机改动立刻保存，再防抖推上来（带本地 updatedAt）
+//   * 登录/开 App 时按区间拉一次，服务端更新就覆盖本机，本机更新就推上去
+// 冲突用「谁的时间戳新谁赢」，不做合并 —— 同一天两台设备各改一半的场景先不管。
+
+/** 一天一条记录最多多少字节（防止有人拿它当文件存储） */
+const DIARY_MAX_BYTES = 200 * 1024;
+/** 一次最多推多少天 */
+const DIARY_MAX_DAYS = 400;
+
+function sanitizeEntries(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw.slice(0, 200)) {
+    if (!item || typeof item !== 'object') continue;
+    const id = cleanString(item.id, 64);
+    const name = cleanString(item.name, 64);
+    if (!id || !name) continue;
+    out.push({
+      id,
+      name,
+      meal: cleanString(item.meal, 16) || 'snack',
+      date: cleanString(item.date, 10),
+      foodId: cleanString(item.foodId, 64),
+      cat: cleanString(item.cat, 32),
+      unit: cleanString(item.unit, 8),
+      qty: num(item.qty),
+      grams: num(item.grams) || num(item.amount),
+      kcal: num(item.kcal),
+      p: num(item.p),
+      f: num(item.f),
+      ch: num(item.ch),
+      ts: Math.trunc(num(item.ts))
+    });
+  }
+  return out;
+}
+
+app.get('/api/diary', requireAuth, h(async (req, res) => {
+  const from = isValidDate(req.query.from) ? String(req.query.from) : todayStr(-365);
+  const to = isValidDate(req.query.to) ? String(req.query.to) : todayStr(1);
+  const rows = await all(
+    'SELECT date, entries_json, updated_at FROM diary WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date',
+    [req.user.id, from, to]
+  );
+  res.json({
+    from,
+    to,
+    uid: req.user.uid || '',
+    days: rows.map((r) => {
+      let entries = [];
+      try { entries = JSON.parse(r.entries_json); } catch { entries = []; }
+      return { date: r.date, entries, updatedAt: Number(r.updated_at) };
+    })
+  });
+}));
+
+app.put('/api/diary', requireAuth, h(async (req, res) => {
+  const body = req.body || {};
+  const days = Array.isArray(body.days) ? body.days : [];
+  if (!days.length) throw new HttpError(400, 'days 不能为空');
+  if (days.length > DIARY_MAX_DAYS) throw new HttpError(400, `一次最多推 ${DIARY_MAX_DAYS} 天`);
+
+  const now = Date.now();
+  const saved = [];
+  for (const day of days) {
+    const date = String((day || {}).date || '');
+    if (!isValidDate(date)) continue;
+    const entries = sanitizeEntries((day || {}).entries);
+    const json = JSON.stringify(entries);
+    if (json.length > DIARY_MAX_BYTES) {
+      throw new HttpError(413, `${date} 这一天的记录太大了（上限 200 KB）`);
+    }
+    const updatedAt = Math.trunc(num((day || {}).updatedAt)) || now;
+    // 只有新的才覆盖：两台设备来回推不会把新数据盖回旧的
+    await run(
+      `INSERT INTO diary (user_id, date, entries_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, date) DO UPDATE SET
+         entries_json = excluded.entries_json,
+         updated_at   = excluded.updated_at
+       WHERE excluded.updated_at >= diary.updated_at`,
+      [req.user.id, date, json, updatedAt]
+    );
+    saved.push(date);
+  }
+  res.json({ ok: true, saved: saved.length, dates: saved });
+}));
+
+// 按短号查人（加好友前先看一眼是谁）
+app.get('/api/users/by-uid/:uid', requireAuth, h(async (req, res) => {
+  const user = await findUserByUid(req.params.uid);
+  if (!user) throw new HttpError(404, `找不到 ID 为 ${normalizeUid(req.params.uid)} 的用户`);
+  res.json({ user: toPublicUser(user) });
+}));
+
 // --------------------------------------------------------- /api/friends
 
 app.get('/api/friends', requireAuth, h(async (req, res) => {
@@ -385,11 +492,14 @@ app.get('/api/friends', requireAuth, h(async (req, res) => {
 }));
 
 app.post('/api/friends/request', requireAuth, h(async (req, res) => {
-  const username = cleanString((req.body || {}).username, 24).toLowerCase();
-  if (!username) throw new HttpError(400, 'username 不能为空');
+  const body = req.body || {};
+  // 新方式：按 6 位短号加（uid）；老方式按登录名加（username）继续兼容
+  const uid = normalizeUid(body.uid);
+  const username = cleanString(body.username, 24).toLowerCase();
+  if (!uid && !username) throw new HttpError(400, '请填对方的 ID 或用户名');
 
-  const target = await findUserByUsername(username);
-  if (!target) throw new HttpError(404, '找不到该用户');
+  const target = uid ? await findUserByUid(uid) : await findUserByUsername(username);
+  if (!target) throw new HttpError(404, uid ? `找不到 ID 为 ${uid} 的用户` : '找不到该用户');
   const targetId = Number(target.id);
   if (targetId === req.user.id) throw new HttpError(400, '不能加自己为好友');
 
@@ -983,6 +1093,7 @@ const server = app.listen(PORT, () => {
 });
 
 initDb()
+  .then(() => backfillUserUids())
   .then(() => cleanupExpiredSessions())
   .catch((err) => {
     console.error('[fatal] 数据库初始化失败，请检查 TURSO_DATABASE_URL / TURSO_AUTH_TOKEN：', err);
