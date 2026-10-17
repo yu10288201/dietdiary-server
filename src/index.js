@@ -4,6 +4,9 @@
 
 import express from 'express';
 import cors from 'cors';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
 
 import { all, get, initDb, run, dbUrl } from './db.js';
@@ -172,14 +175,52 @@ function h(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
+/**
+ * 更新清单里「最新版本」的来源，优先级从高到低：
+ *   1. Turso 的 app_versions 表（有人手动写了行就以它为准，方便热改）
+ *   2. 仓库里的 version.json（**发版脚本会自动改它并 push**，Render 收到 push
+ *      自动重新部署，所以日常发版只要一条命令，不用再进 Render 面板改环境变量）
+ *   3. 环境变量 APK_*（保留给不想改文件的部署方式）
+ *   4. 内置默认值
+ * url 默认指向 GitHub 的 releases/latest/download/shike.apk —— 这个地址**永不改变**，
+ * 每次发版只要把同一文件名传上去就行，不用再改配置。
+ */
+const DEFAULT_APK_URL = 'https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk';
+
+let versionFileCache = { mtimeMs: 0, data: null };
+
+/* 本文件是 ESM，没有 __dirname，必须从 import.meta.url 推 */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 读 version.json（按 mtime 缓存，改了文件不用重启进程） */
+function readVersionFile() {
+  try {
+    const file = path.join(HERE, '..', 'version.json');
+    const st = fs.statSync(file);
+    if (versionFileCache.data && versionFileCache.mtimeMs === st.mtimeMs) return versionFileCache.data;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const data = raw && (raw.android || raw);
+    versionFileCache = { mtimeMs: st.mtimeMs, data: data || null };
+    return data || null;
+  } catch {
+    return null; // 文件缺失/写坏了都不能影响启动，直接回退到环境变量
+  }
+}
+
 function versionPayload() {
+  const f = readVersionFile() || {};
+  const pick = (fileVal, envVal, dflt) => {
+    if (fileVal !== undefined && fileVal !== null && fileVal !== '') return fileVal;
+    if (envVal !== undefined && envVal !== '') return envVal;
+    return dflt;
+  };
   return {
-    versionCode: Number(process.env.APK_VERSION_CODE || 1),
-    versionName: String(process.env.APK_VERSION_NAME || '0.1.0'),
-    url: String(process.env.APK_URL || 'https://example.com/dietdiary-0.1.0.apk'),
-    notes: String(process.env.APK_NOTES || ''),
-    force: String(process.env.APK_FORCE || 'false').toLowerCase() === 'true',
-    minSupported: Number(process.env.APK_MIN_SUPPORTED || 1)
+    versionCode: Number(pick(f.versionCode, process.env.APK_VERSION_CODE, 1)),
+    versionName: String(pick(f.versionName, process.env.APK_VERSION_NAME, '0.1.0')),
+    url: String(pick(f.url, process.env.APK_URL, DEFAULT_APK_URL)),
+    notes: String(pick(f.notes, process.env.APK_NOTES, '')),
+    force: String(pick(f.force, process.env.APK_FORCE, 'false')).toLowerCase() === 'true',
+    minSupported: Number(pick(f.minSupported, process.env.APK_MIN_SUPPORTED, 1))
   };
 }
 
@@ -904,6 +945,23 @@ app.get('/api/version', h(async (req, res) => {
   }
   return res.json({ platform, ...fallback });
 }));
+
+// ------------------------------------------------------- /api/download/apk
+//
+// 安装包直接放在仓库里（server/public/shike.apk，只有 ~75 KB），由本服务发出去。
+// 这样 APK 的地址**永远不变**，也不用每次发版去 GitHub 建 Release 传附件 ——
+// 发版脚本把新包覆盖到这里、push 一下，Render 自动重新部署就完成了。
+// 注意：Render 免费实例 15 分钟无流量会休眠，第一个下载请求可能要等 30-60 秒唤醒。
+app.get('/api/download/apk', (req, res) => {
+  const file = path.join(HERE, '..', 'public', 'shike.apk');
+  if (!fs.existsSync(file)) return res.status(404).json({ error: '安装包还没上传' });
+  const st = fs.statSync(file);
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Length', String(st.size));
+  res.setHeader('Content-Disposition', 'attachment; filename="shike.apk"');
+  res.setHeader('Cache-Control', 'no-cache');
+  fs.createReadStream(file).pipe(res);
+});
 
 // -------------------------------------------------------------- 兜底处理
 
