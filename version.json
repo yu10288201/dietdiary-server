@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  14,
-                    "versionName":  "0.4.3",
+                    "versionCode":  15,
+                    "versionName":  "0.4.4",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "修「点击检查更新半天没反应」：每个版本请求都加硬超时（GitHub 连不上时不再无限等），谁先回谁算数，手动检查立刻提示「正在检查更新…」",
+                    "notes":  "修今日页日历：日期条改为到「今天」为止，并一进来就自动滚到今天（以前 17 号在屏幕外，要往右滑才找得到，点日期还会跳回开头）",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-17T02:40:03Z",
+                    "publishedAt":  "2026-10-17T03:06:21Z",
                     "channel":  "stable",
-                    "sha256":  "7cdccd7f97a0e95f7bfb9b37eba51b24446d9d8e2eaaf66676ef50dab1d99c2f",
+                    "sha256":  "6848bc12b77a364c25c5253bf5e25a195fd627b0f81fd1377af345434e4b6df5",
                     "size":  82867
                 }
 }
