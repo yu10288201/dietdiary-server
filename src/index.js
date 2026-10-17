@@ -224,7 +224,12 @@ function versionPayload() {
     url: String(pick(f.url, process.env.APK_URL, DEFAULT_APK_URL)),
     notes: String(pick(f.notes, process.env.APK_NOTES, '')),
     force: String(pick(f.force, process.env.APK_FORCE, 'false')).toLowerCase() === 'true',
-    minSupported: Number(pick(f.minSupported, process.env.APK_MIN_SUPPORTED, 1))
+    minSupported: Number(pick(f.minSupported, process.env.APK_MIN_SUPPORTED, 1)),
+    // 指纹和大小必须一起返回：App 只有拿到 sha256 才会在安装前校验。
+    // 少了它就会出现「提示是新版、装上去还是旧版」—— 因为 GitHub raw 有
+    // 最长 5 分钟的 CDN 缓存，下拉到的是上一个包也不会被拦下。
+    sha256: String(pick(f.sha256, process.env.APK_SHA256, '')),
+    size: Number(pick(f.size, process.env.APK_SIZE, 0))
   };
 }
 
@@ -1040,6 +1045,10 @@ app.get('/api/version', h(async (req, res) => {
   try {
     const row = await get('SELECT * FROM app_versions WHERE platform = ?', [platform]);
     if (row) {
+      // 指纹只跟「同一版」配套给出去：库里那行和 version.json 说的版本不一样时，
+      // 说明两个来源有一个是旧的，这时宁可返回空指纹（App 不做校验），
+      // 也不能返回别版包的 sha256 把正常下载判成「校验不一致」。
+      const sameVersion = Number(row.version_code) === fallback.versionCode;
       return res.json({
         platform,
         versionCode: Number(row.version_code),
@@ -1047,7 +1056,9 @@ app.get('/api/version', h(async (req, res) => {
         url: row.url || fallback.url,
         notes: row.notes || fallback.notes,
         force: Number(row.force) === 1,
-        minSupported: Number(row.min_supported)
+        minSupported: Number(row.min_supported),
+        sha256: sameVersion ? fallback.sha256 : '',
+        size: sameVersion ? fallback.size : 0
       });
     }
   } catch {
