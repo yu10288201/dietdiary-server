@@ -1,15 +1,15 @@
 {
-  "_comment": "App 更新清单示例。运行时 /api/version 优先读 Turso 的 app_versions 表；表里没有 platform=android 的行时，才回退到这里的示例值 + 环境变量 APK_*。要发布新版本，请写 app_versions 表（见 README『发布新版本』）。",
-  "android": {
-    "versionCode": 1,
-    "versionName": "0.1.0",
-    "url": "https://github.com/yourname/dietdiary/releases/download/v0.1.0/dietdiary-0.1.0.apk",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "size": 49965,
-    "notes": "首个内测版",
-    "force": false,
-    "minSupported": 1,
-    "publishedAt": "2026-10-16T00:00:00Z",
-    "channel": "stable"
-  }
+    "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向后端自己发的安装包（/api/download/apk），永远不变。",
+    "android":  {
+                    "versionCode":  7,
+                    "versionName":  "0.3.2",
+                    "url":  "https://shike-api.onrender.com/api/download/apk",
+                    "notes":  "发版流程简化：安装包改由后端自己发，地址永不变；以后一条命令就能发版",
+                    "force":  false,
+                    "minSupported":  1,
+                    "publishedAt":  "2026-10-17T01:27:25Z",
+                    "channel":  "stable",
+                    "sha256":  "697312c9154d7bb32f3e02012a3bb1a3b279f8f61f7a4095d5a6fce772f12c1d",
+                    "size":  74675
+                }
 }
