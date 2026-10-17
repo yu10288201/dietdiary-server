@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  102,
-                    "versionName":  "0.5.1",
+                    "versionCode":  1000000,
+                    "versionName":  "0.5.2",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "身体档案和体重也上云了：换手机登录同一账号，身高体重、目标和体重曲线都跟着回来",
+                    "notes":  "版本号直接跳到 1000000：越过手机上那个算不清的旧版本号，「已安装更高版本」不会再挡路",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-17T03:38:57Z",
+                    "publishedAt":  "2026-10-17T03:45:44Z",
                     "channel":  "stable",
-                    "sha256":  "0ad3fcb20639c744161b16e14b7b9cc5e6be40c798f5e8fd0c051f946acebc52",
+                    "sha256":  "4c9487a49e343674c095bce7ca9af35d672aea63a176023a83c409329023ec21",
                     "size":  91059
                 }
 }
