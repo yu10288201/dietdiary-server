@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  1000006,
-                    "versionName":  "0.5.8",
+                    "versionCode":  1000007,
+                    "versionName":  "0.5.9",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "食物库从 174 种涨到 223 种：新增麦当劳、肯德基、塔斯汀、沙县小吃、兰州拉面、螺蛳粉、麻辣烫等常见店铺食物；还加了同一件东西的不同吃法——汉堡不加酱、无糖（零度）可乐、泡面整包/半包调料/只面饼、沙县加卤蛋或鸡腿去皮、兰州拉面加面加蛋加肉、不喝汤等",
+                    "notes":  "食物库涨到 238 种：加了 15 种具体牌子的泡面（康师傅、统一、白象、今麦郎、日清、农心、三养、五谷道场、拉面说），按一袋/一桶计热量。新建自定义食物默认按「这一份」填，点了这顿吃了多少就填多少，不用换算每 100 克；食物库里的自定义食物默认收起。切页面、开浮层、点按钮都加了过渡动效，写盘和搜索做了合并，翻页更快。",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-18T04:04:46Z",
+                    "publishedAt":  "2026-10-18T06:35:36Z",
                     "channel":  "stable",
-                    "sha256":  "7282b36cc516257c45b917aa3af4fafb8a5fdd16b93a50dbd0dc409f55b35ca6",
-                    "size":  140569
+                    "sha256":  "d96cf3de81cc33b525a3db485f8dddc084a4e3bec88b9893d9fb006c0b5c5a17",
+                    "size":  144665
                 }
 }

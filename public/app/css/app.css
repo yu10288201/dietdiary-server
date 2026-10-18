@@ -623,3 +623,48 @@ body.dark .barchart .bar { background: linear-gradient(var(--brand), var(--brand
 
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .anim { animation: pop .22s ease-out both; }
+
+/* --------------------------------------------------------------- 动效 */
+/* 切标签/切日期时整屏换内容，什么都没有的话就是「啪」一下。
+ * 只给 .screen 里的直接子块（卡片、日期条、故事条）做一次短位移，
+ * 不给每一行做 —— 食物库一次能出 238 行，逐个动画反而卡。 */
+@keyframes viewIn {
+  from { opacity: 0; transform: translateY(10px) scale(.996); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sheetIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+#view.v-enter .screen > * { animation: viewIn .26s cubic-bezier(.22, 1, .36, 1) both; }
+/* 第二块起稍晚一点点，观感是「一叠卡片摊开」而不是整体抖一下 */
+#view.v-enter .screen > *:nth-child(2) { animation-delay: .03s; }
+#view.v-enter .screen > *:nth-child(3) { animation-delay: .05s; }
+/* 浮层内容同步淡入，和 sheet 主体的滑入叠在一起 */
+#sheet.show .sheet-body > .field,
+#sheet.show .sheet-body > .preview,
+#sheet.show .sheet-body > .card { animation: sheetIn .22s ease-out both; }
+
+/* 点击反馈：卡片/行按下去缩一点点，手指能感到「按到了」 */
+.card, .row, .food-row { transition: transform .12s ease, box-shadow .12s ease; }
+.card:active, .row:active { transform: scale(.994); }
+.btn:active, .chip:active, .icon-btn:active { transform: scale(.96); }
+.btn, .chip, .icon-btn { transition: transform .1s ease, background .15s ease, color .15s ease, border-color .15s ease; }
+
+/* 列表出现时只给前 8 行加极小的错位淡入，后面不参与（长列表不卡） */
+@keyframes rowIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+#view.v-enter .list > .row:nth-child(-n+8),
+#view.v-enter .foods-body .row:nth-child(-n+8) {
+  animation: rowIn .22s ease-out both;
+}
+#view.v-enter .foods-body .row:nth-child(2) { animation-delay: .012s; }
+#view.v-enter .foods-body .row:nth-child(3) { animation-delay: .024s; }
+
+/* 系统开了「减弱动态效果」就全关，别跟无障碍设置对着干 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

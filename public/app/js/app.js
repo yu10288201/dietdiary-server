@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.5.8';
-  var APP_VERSION_CODE = 1000006;
+  var APP_VERSION = '0.5.9';
+  var APP_VERSION_CODE = 1000007;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -254,10 +254,25 @@
   }
 
   /* ----------------------------------------------------------- persistence */
+  /* save() 原来每改一点就整体 JSON.stringify + 落盘一次。记录攒到几百条以后，
+   * 切主题、点两下数字这种连击会连着写好几遍。改成合并到下一帧再写，
+   * 真正要离开页面前 flushSave() 强制补上，不会丢。
+   */
+  var saveTimer = 0;
+
+  function flushSave() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; saveNow(); }
+  }
+
   function save() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(function () { saveTimer = 0; saveNow(); }, 120);
+  }
+
+  function saveNow() {
     var payload = {
       v: 1, theme: state.theme, mode: state.mode, goals: state.goals,
-      entries: state.entries, custom: state.custom, customOpen: state.customOpen,
+      entries: state.entries, custom: state.custom,
       favorites: state.favorites,
       recent: state.recent, profile: state.profile, onboarded: state.onboarded,
       friends: state.friends, friendReqs: state.friendReqs, time: Date.now(),
@@ -304,7 +319,6 @@
       state.profileSyncedAt = Number(p.profileSyncedAt) || 0;
       state.entries = p.entries || [];
       state.custom = p.custom || [];
-      state.customOpen = !!p.customOpen;
       state.favorites = p.favorites || [];
       state.recent = p.recent || [];
       state.profile = p.profile || state.profile;
@@ -386,7 +400,18 @@
     else if (v === 'foods') html = viewFoods();
     else if (v === 'social') html = viewSocial();
     else if (v === 'me') html = viewMe();
-    $('#view').innerHTML = html;
+    var view = $('#view');
+    view.innerHTML = html;
+    // 换页/换日期才播入场动画并回到顶部；同页刷新（加一条记录、切主题）不播，
+    // 否则每点一下整屏都晃一遍。
+    var key = state.view + '|' + state.date;
+    if (key !== render._key) {
+      render._key = key;
+      view.classList.remove('v-enter');
+      void view.offsetWidth;          // 强制重排，让动画能重播
+      view.classList.add('v-enter');
+      window.scrollTo(0, 0);
+    }
     renderTabbar();
     // 日期条是横向滚动的，重建 DOM 后 scrollLeft 会回到 0，
     // 结果今天是 17 号却只看到 11–15，得往右滑才找得到今天。
@@ -871,7 +896,9 @@
     return '<div class="row" data-act="food-detail" data-name="' + esc(f.n) + '">' +
       '<div class="thumb">' + foodEmoji(f.n, f.c) + '</div>' +
       '<div class="body"><div class="title">' + (fav ? '<span class="star">★</span> ' : '') + esc(f.n) + (mine ? ' <span class="small muted">自定义</span>' : '') + '</div>' +
-      '<div class="meta">' + esc(f.c) + ' · 每100g 碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f) + '</div></div>' +
+      '<div class="meta">' + esc(f.c) + ' · ' +
+        (f.ps ? '按份记 · 碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f)
+              : '每100g 碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f)) + '</div></div>' +
       '<div class="tail"><b>' + r0(f.e) + '</b>kcal</div></div>';
   }
 
@@ -1285,8 +1312,14 @@
   /* -------------------------------------------------------- portion sheet */
   function openPortionSheet(isEdit) {
     var d = picker.draft;
+    var food0 = allFoods()[d.name];
+    // 「按份记」的自定义食物：整份就是 1 份，没有「每 100 克」这回事，
+    // 所以把折算重量换掉，免得让人以为自己得称克数。
+    var byServing = !!(food0 && food0.ps);
     var food = { n: d.name, c: d.cat, e: d.per100.e, p: d.per100.p, f: d.per100.f, ch: d.per100.ch, u: d.unit, w: d.grams / (d.qty || 1) };
-    var units = ['克', '份', '个', '只', '片', '杯', '碗', '勺', '盒', '瓶', '根', '块', '把'];
+    // 单位从 SERVINGS 来，别再手写一份 —— 手写那份漏了 桶/袋/对/笼/罐/包/条，
+    // 选「桶装面」时一个高亮都没有。
+    var units = ['克'].concat(Object.keys(window.SERVINGS).filter(function (u) { return u !== '克'; }));
     var body =
       '<div class="preview">' +
       '<div class="cell"><div class="v" id="pv-kcal">0</div><div class="k">热量 kcal</div></div>' +
@@ -1304,9 +1337,13 @@
       '<div class="field"><label>单位</label><div class="quick">' +
       units.map(function (u) { return '<button data-act="unit" data-u="' + u + '" class="' + (d.unit === u ? 'chip on' : '') + '" style="' + (d.unit === u ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' + u + '</button>'; }).join('') +
       '</div></div>' +
-      '<div class="field"><label>折算重量（克）</label>' +
-      '<input class="input" id="in-grams" type="number" inputmode="decimal" value="' + Math.round(d.grams) + '">' +
-      '<div class="small muted mt8">每 100g：' + r0(d.per100.e) + ' kcal · 碳 ' + f1(d.per100.ch) + ' · 蛋 ' + f1(d.per100.p) + ' · 脂 ' + f1(d.per100.f) + '</div></div>' +
+      (byServing
+        ? '<div class="field"><div class="small muted">按份记的食物：1 ' + esc(d.unit) + ' = 整份。' +
+          '数量填 0.5 就是半份，不用称克数。</div>' +
+          '<div class="small muted mt8">整份：' + r0(d.per100.e) + ' kcal · 碳 ' + f1(d.per100.ch) + ' · 蛋 ' + f1(d.per100.p) + ' · 脂 ' + f1(d.per100.f) + '</div></div>'
+        : '<div class="field"><label>折算重量（克）</label>' +
+          '<input class="input" id="in-grams" type="number" inputmode="decimal" value="' + Math.round(d.grams) + '">' +
+          '<div class="small muted mt8">每 100g：' + r0(d.per100.e) + ' kcal · 碳 ' + f1(d.per100.ch) + ' · 蛋 ' + f1(d.per100.p) + ' · 脂 ' + f1(d.per100.f) + '</div></div>') +
       '<div class="field"><label>餐次</label><div class="quick">' +
       window.MEALS.map(function (m) { return '<button data-act="meal" data-m="' + m.id + '" style="' + (d.meal === m.id ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' + m.emoji + m.name + '</button>'; }).join('') +
       '</div></div>';
@@ -1324,7 +1361,8 @@
       var per = (unit === '克') ? 1 : gramsPerUnit(picker.draft.name, unit);
       picker.draft.qty = qty;
       picker.draft.grams = Math.max(0, qty * per);
-      $('#in-grams', sheet).value = Math.round(picker.draft.grams);
+      var gi = $('#in-grams', sheet);
+      if (gi) gi.value = Math.round(picker.draft.grams);
       preview();
     }
     function preview() {
@@ -1428,14 +1466,27 @@
   }
 
   /* ------------------------------------------------------- custom food */
+  /* 新建自定义食物：两种填法
+   *   serving —— 按「这一份 / 这一顿」填总量（默认）。出去吃一顿、点一杯奶茶，
+   *              手里只有「这顿大概多少卡、多少蛋白」，谁也不会先换算成每 100 克。
+   *   100g    —— 按每 100 克填（包装食品背面就是这么印的），保留给想精确复用的。
+   * serving 存成 w = 100、ps = 1，这样「1 份」在份量面板里等于整份，不用动分量换算。
+   */
+  var nfMode = 'serving';
+
   function openNewFood() {
+    nfMode = 'serving';
     var cats = window.CATEGORIES.map(function (c) { return c.id; });
     var body =
-      '<div class="field"><label>食物名称</label><input class="input" id="nf-name" placeholder="如 自制鸡胸肉沙拉"></div>' +
+      '<div class="field"><label>怎么填</label><div class="segmented" id="nf-mode">' +
+      '<button class="on" data-act="nf-mode" data-mode="serving">按这一份</button>' +
+      '<button data-act="nf-mode" data-mode="100g">按每 100 克</button>' +
+      '</div><div class="small muted mt8">' + NF_HINT.serving + '</div></div>' +
+      '<div class="field"><label>食物名称</label><input class="input" id="nf-name" placeholder="如 楼下的鸡腿饭"></div>' +
       '<div class="field"><label>分类</label><select class="input" id="nf-cat">' +
       cats.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('') + '</select></div>' +
       // 每格都带固定标签。以前只写占位符，填进去半格就看不见自己在填什么了。
-      '<div class="field"><label>每 100 克营养</label><div class="num-grid">' +
+      '<div class="field"><label id="nf-nut-label">这一份的营养</label><div class="num-grid">' +
       '<div class="field"><label>热量 kcal</label>' +
       '<input class="input" id="nf-e" type="number" inputmode="decimal" placeholder="自动"></div>' +
       '<div class="field"><label>蛋白质 g</label>' +
@@ -1444,18 +1495,20 @@
       '<input class="input" id="nf-ch" type="number" inputmode="decimal"></div>' +
       '<div class="field"><label>脂肪 g</label>' +
       '<input class="input" id="nf-f" type="number" inputmode="decimal"></div>' +
-      '</div><div class="small muted mt8">填了碳蛋脂，热量按 <b>蛋白 4 + 碳水 4 + 脂肪 9</b>（kcal / 克）自动算；也可以直接改热量。</div></div>' +
-      '<div class="field"><label>常用份量</label><div class="num-grid">' +
+      '</div><div class="small muted mt8" id="nf-tip">' + NF_TIP.serving + '</div></div>' +
+      '<div class="field"><label>单位与份量</label><div class="num-grid">' +
       '<div class="field"><label>单位</label><select class="input" id="nf-unit">' +
-      Object.keys(window.SERVINGS).map(function (u) { return '<option value="' + u + '">' + u + '</option>'; }).join('') +
-      '</select></div>' +
-      '<div class="field"><label>每份克数</label>' +
+      Object.keys(window.SERVINGS).map(function (u) {
+        return '<option value="' + u + '"' + (u === '份' ? ' selected' : '') + '>' + u + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field" id="nf-w-field" style="display:none"><label>每份克数</label>' +
       '<input class="input" id="nf-w" type="number" inputmode="decimal" placeholder="100"></div>' +
       '</div></div>';
 
     var foot = '<button class="btn ghost" data-act="cancel">取消</button>' +
       '<button class="btn" data-act="save-food">保存并使用</button>';
     var sheet = openSheet('新建自定义食物', body, foot);
+    setNewFoodMode('serving', sheet);
 
     sheet.addEventListener('input', function (ev) {
       if (ev.target.id === 'nf-e') return;
@@ -1468,6 +1521,39 @@
     });
   }
 
+  var NF_HINT = {
+    serving: '不换算每 100 克，这顿吃了多少就填多少。',
+    '100g': '按包装上的「每 100 克」填，以后按克数称着记更准。'
+  };
+  var NF_TIP = {
+    serving: '填了碳蛋脂，热量按 <b>蛋白 4 + 碳水 4 + 脂肪 9</b> 自动算；也可以直接改热量。',
+    '100g': '填了碳蛋脂，热量按 <b>蛋白 4 + 碳水 4 + 脂肪 9</b> 自动算；也可以直接改热量。'
+  };
+
+  function setNewFoodMode(mode, sheet) {
+    nfMode = mode === '100g' ? '100g' : 'serving';
+    sheet = sheet || $('#sheet');
+    if (!sheet) return;
+    var btns = sheet.querySelectorAll('#nf-mode button');
+    for (var i = 0; i < btns.length; i++) {
+      var on = btns[i].getAttribute('data-mode') === nfMode;
+      if (on) btns[i].classList.add('on'); else btns[i].classList.remove('on');
+    }
+    var lab = $('#nf-nut-label', sheet);
+    if (lab) lab.textContent = nfMode === 'serving' ? '这一份的营养' : '每 100 克营养';
+    var wf = $('#nf-w-field', sheet);
+    if (wf) wf.style.display = nfMode === '100g' ? '' : 'none';
+    if (nfMode === '100g') {
+      var w = $('#nf-w', sheet);
+      var u = $('#nf-unit', sheet);
+      if (w && !w.value) w.value = (u && window.SERVINGS[u.value]) || 100;
+    }
+    var hint = sheet.querySelector('#nf-mode + .small');
+    if (hint) hint.innerHTML = NF_HINT[nfMode];
+    var tip = $('#nf-tip', sheet);
+    if (tip) tip.innerHTML = NF_TIP[nfMode];
+  }
+
   function saveNewFood() {
     var sheet = $('#sheet');
     var name = ($('#nf-name', sheet).value || '').trim();
@@ -1477,8 +1563,10 @@
     var f = parseFloat($('#nf-f', sheet).value) || 0;
     var e = parseFloat($('#nf-e', sheet).value) || r0(p * 4 + ch * 4 + f * 9);
     var unit = $('#nf-unit', sheet).value || '份';
-    var w = parseFloat($('#nf-w', sheet).value) || window.SERVINGS[unit] || 100;
+    var serving = nfMode !== '100g';
+    var w = serving ? 100 : (parseFloat($('#nf-w', sheet).value) || window.SERVINGS[unit] || 100);
     var food = { n: name, c: $('#nf-cat', sheet).value, e: e, p: p, f: f, ch: ch, u: unit, w: w, custom: true };
+    if (serving) food.ps = 1;
     state.custom = state.custom.filter(function (x) { return x.n !== name; });
     state.custom.push(food);
     invalidateFoods();
@@ -1680,6 +1768,16 @@
       pullDiary(true);
       pullProfile(true);
       refreshSocial(false);
+    });
+  }
+
+  // save() 是合并写入，离开页面前把还没落盘的那一次补上
+  if (!window.__saveFlushBound) {
+    window.__saveFlushBound = true;
+    window.addEventListener('pagehide', flushSave);
+    window.addEventListener('beforeunload', flushSave);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') flushSave();
     });
   }
 
@@ -2544,6 +2642,9 @@
   function handleAction(act, el, ev) {
     switch (act) {
       case 'tab':
+        // 离开食物库就把「自定义食物」重新收起来：用户要的是默认收起，
+        // 展开只是这一会儿的动作，不该跟着人一直挂在页面上。
+        if (state.view === 'foods' && el.getAttribute('data-tab') !== 'foods') state.customOpen = false;
         state.view = el.getAttribute('data-tab');
         syncHash();
         render();
@@ -2605,6 +2706,7 @@
       case 'confirm-entry': confirmEntry(); break;
       case 'delete-entry': deleteEntry(picker.draft.id); break;
       case 'save-food': saveNewFood(); break;
+      case 'nf-mode': setNewFoodMode(el.getAttribute('data-mode'), $('#sheet')); break;
       case 'cancel': closeSheet(); break;
       // 引导页（独立整页）
       case 'ob-login': doOnboard(false); break;
@@ -2663,8 +2765,9 @@
         openThemeSheet();
         break;
       case 'toggle-custom':
+        // 只影响这一次浏览：不落盘，下次进食物库还是收起的。
+        // （用户说「食物库里会显示自定义食物 这个默认收起」，展开更像临时动作。）
         state.customOpen = !state.customOpen;
-        save();
         render();
         break;
       case 'toggle': {
@@ -2969,12 +3072,18 @@
     });
     // 食物库的搜索框：只重绘列表那一块，不重绘整个页面 ——
     // 否则每敲一个字输入框就被换掉，焦点和光标都会丢。
+    // 重绘合并到下一帧：238 种食物时打字快，一个字一次全量重排会掉帧。
+    var foodsSearchTick = 0;
     document.addEventListener('input', function (ev) {
       var el = ev.target;
       if (!el || el.id !== 'food-search') return;
       foodsFilter.q = el.value;
-      var box = $('#foods-body');
-      if (box) box.innerHTML = foodsBodyHtml();
+      if (foodsSearchTick) return;
+      foodsSearchTick = requestAnimationFrame(function () {
+        foodsSearchTick = 0;
+        var box = $('#foods-body');
+        if (box) box.innerHTML = foodsBodyHtml();
+      });
     });
     $('#scrim').addEventListener('click', closeSheet);
     // The FAB lives in index.html, not in a render() string, so its icon has to
@@ -3234,6 +3343,8 @@
   if (/[?&]debug=1/.test(location.search)) {
     window.__diet = {
       state: state,
+      flush: flushSave,
+      saveNow: saveNow,
       view: function (v) { state.view = v; syncHash(); render(); },
       sheet: function (which, arg) {
         if (which === 'portion') beginEntry(arg || '鸡胸肉');
