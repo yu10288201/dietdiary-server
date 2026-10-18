@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.5.6';
-  var APP_VERSION_CODE = 1000004;
+  var APP_VERSION = '0.5.7';
+  var APP_VERSION_CODE = 1000005;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -87,6 +87,7 @@
     download: '<path d="M12 4v11"/><path d="m8 11.5 4 4 4-4"/><path d="M5 20h14"/>',
     cloud: '<path d="M7 18h9.5a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7 18z"/>',
     about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.8" r="1.1" fill="currentColor"/>',
+    refresh: '<path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4v5h-5"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.1 14.6a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.64 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1.03z"/>'
   };
   function svg(name, cls) {
@@ -880,6 +881,7 @@
       ? (state.server.token ? state.friends.length + ' 位好友 · 已连接服务器' : '已配置服务器 · 还没登录')
       : state.friends.length + ' 位好友 · 本机示例数据';
     var html = topbar('好友', sub,
+      '<button class="icon-btn" data-act="refresh-social">' + svg('refresh') + '</button>' +
       '<button class="icon-btn" data-act="add-friend">' + svg('plus') + '</button>');
     html += '<div class="screen has-topbar">';
 
@@ -1568,10 +1570,10 @@
       render();
       toast(isRegister ? '注册成功，已登录' : '登录成功');
       // 登录后：先把本机记录整批迁上去，同时拉服务器上已有的（换手机能还原）
-      pullDiary(true);
+      pullDiary(true, true);
       pullProfile(true);
-      pullFriends();
-      refreshFriendRequests(true);
+      pullFriends('', true);
+      refreshFriendRequests(true, true);
       // 当天的记录推上去，好友马上就能看到；之后就靠自动同步
       scheduleSync();
       refreshFeed();
@@ -1583,11 +1585,31 @@
    * accept、reject 三个接口，但客户端从来没有调用过 —— 所以对方发了请求，
    * 这边永远不知道，请求就一直卡在 pending。
    */
-  function refreshFriendRequests(silent) {
+  /* ---------------------------------------------------------------------------
+   * 拉取节流
+   *
+   * 以前每处都各拉各的：切个标签、从后台回来、对方点了同意……都可能连着发好几个
+   * 一样的请求，Render 免费实例被打得慢上加慢。这里给每类数据一个最小间隔，
+   * 内部调用（不带 force）自动去重，只有用户主动点刷新 / 刚登录才强制穿透。
+   * ------------------------------------------------------------------------ */
+  var PULL_GAP = { feed: 4000, friends: 4000, diary: 8000, profile: 15000, reqs: 5000 };
+  var lastPull = {};
+  function due(key, force) {
+    if (force) { lastPull[key] = Date.now(); return true; }
+    var now = Date.now();
+    if (now - (lastPull[key] || 0) < (PULL_GAP[key] || 5000)) return false;
+    lastPull[key] = Date.now();
+    return true;
+  }
+
+  function refreshFriendRequests(silent, force) {
     if (!serverOn() || !state.server.token) {
       state.friendReqs = { incoming: [], outgoing: [] };
       return null;
     }
+    if (!due('reqs', force)) return null;
+    var prevOut = (state.friendReqs.outgoing || []).map(function (r) { return r.uid || ''; });
+    var prevIn = (state.friendReqs.incoming || []).length;
     return api.friendRequests(serverCfg()).then(function (res) {
       if (!res || res.error) {
         if (!silent) toast(res && res.error ? res.error : '拿不到好友请求');
@@ -1601,11 +1623,19 @@
       };
       var inc = (d.incoming || []).map(map);
       var out = (d.outgoing || []).map(map);
-      var before = state.friendReqs.incoming.length;
       state.friendReqs = { incoming: inc, outgoing: out };
       save();
-      // 数量变了才重画，避免每秒都重建 DOM（会把正在输入的框弄掉）
-      if (before !== inc.length) render();
+      // 数量变了才重画，避免每次轮询都重建 DOM（会把正在输入的框弄掉）
+      if (prevIn !== inc.length || prevOut.length !== out.length) render();
+
+      // 我发出去的请求少了一条 —— 要么对方同意了，要么拒绝了。这两种在
+      // /api/friends/requests 里长得一样（都从 pending 里消失），只能再拉一次
+      // 好友列表来判断。以前完全不处理，所以「对方点了同意，我这边看不到」。
+      var gone = prevOut.filter(function (uid) {
+        return uid && !out.some(function (o) { return o.uid === uid; });
+      });
+      if (gone.length) pullFriends('gone', true);
+
       if (!silent) {
         toast(inc.length ? '收到 ' + inc.length + ' 条好友请求，去「好友」看看' : '暂无新的好友请求');
       }
@@ -1623,41 +1653,69 @@
       state.friendReqs.incoming = state.friendReqs.incoming.filter(function (r) { return r.id !== id; });
       save();
       render();
-      if (accept) { toast('已加为好友'); pullFriends(); }
+      if (accept) { toast('已加为好友'); pullFriends('', true); }
       else toast('已拒绝');
+    });
+  }
+
+  /**
+   * 好友页需要的一切：待处理请求 + 好友列表 + 动态。
+   * 用户主动点右上角刷新时 force=true，否则走节流。
+   */
+  function refreshSocial(force) {
+    var jobs = [
+      refreshFriendRequests(true, force),
+      pullFriends('', force),
+      pullFeed(true, force)
+    ];
+    return Promise.all(jobs.map(function (p) { return p || Promise.resolve(); }));
+  }
+  if (!window.__socialRefresh) {
+    window.__socialRefresh = true;
+    // 从后台切回来（手机解锁、从别的 App 回来）立刻补一次，
+    // 这是「非得重进 App 才刷新」最直接的解药。
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible') return;
+      if (!serverOn() || !state.server.token) return;
+      pullDiary(true);
+      pullProfile(true);
+      refreshSocial(false);
     });
   }
 
   function refreshFeed() {
     if (!window.__demoServer && (!serverOn() || !state.server.token)) { toast('先连接服务器并登录'); return; }
     toast('拉取好友动态…');
-    api.feed(serverCfg(), state.date, 'friends').then(function (res) {
-      if (res.error) { toast(res.error); return; }
-      var posts = (res.data && res.data.posts) || [];
-      state.posts = posts.map(postFromApi);
-      render();
-      toast('好友动态已更新（' + posts.length + ' 条）');
-    });
-    api.friends(serverCfg()).then(function (res) {
-      if (res.error || !res.data) return;
-      var list = res.data.friends || [];
-      state.friends = list.map(function (u) {
-        return {
-          id: 'u' + u.id, name: u.displayName || u.username,
-          letter: String(u.displayName || u.username || '?').slice(0, 1),
-          goalText: u.goalText || '一起记录', streak: u.streak || 0, online: true
-        };
-      });
-      save();
-      render();
-    });
-    refreshFriendRequests(true);
+    pullFeed(true, true);
+    pullFriends('', true);
+    refreshFriendRequests(true, true);
   }
 
-  /** 只拉好友列表（接受请求后调，不打扰） */
-  function pullFriends() {
+  /** 只拉动态列表（silent=true 时不弹 toast） */
+  function pullFeed(silent, force) {
+    if (!window.__demoServer && (!serverOn() || !state.server.token)) return;
+    if (!due('feed', force)) return null;
+    return api.feed(serverCfg(), state.date, 'friends').then(function (res) {
+      if (!res || res.error) { if (!silent) toast((res && res.error) || '拉不到动态'); return; }
+      var posts = (res.data && res.data.posts) || [];
+      state.posts = posts.map(postFromApi);
+      save();
+      render();
+      if (!silent) toast('好友动态已更新（' + posts.length + ' 条）');
+    });
+  }
+
+  /**
+   * 拉好友列表。
+   * notice:
+   *   ''       安静更新
+   *   'gone'   我发出的请求消失了 —— 拉完看好友有没有变多，来判断对方是同意还是拒绝
+   */
+  function pullFriends(notice, force) {
     if (!serverOn() || !state.server.token) return;
-    api.friends(serverCfg()).then(function (res) {
+    if (!due('friends', force)) return null;
+    var beforeCount = (state.friends || []).length;
+    return api.friends(serverCfg()).then(function (res) {
       if (!res || res.error || !res.data) return;
       var list = res.data.friends || [];
       state.friends = list.map(function (u) {
@@ -1668,7 +1726,12 @@
         };
       });
       save();
-      render();
+      if (state.view === 'social' || state.view === 'me') render();
+      if (notice === 'gone') {
+        toast(list.length > beforeCount ? '对方同意了，已经加为好友' : '对方没有同意你的好友请求');
+      } else if (list.length > beforeCount) {
+        toast('多了一位好友');
+      }
     });
   }
 
@@ -1780,8 +1843,9 @@
    *   * 本机更新   → 保持本机，等 pushDirtyDiary 推上去
    *   * 本机有、服务器没有（老版本升级上来第一次登录）→ 标记待推，完成迁移
    */
-  function pullDiary(silent) {
+  function pullDiary(silent, force) {
     if (!autoSyncReady()) return;
+    if (!due('diary', force)) return;
     var to = today(), from = shiftDay(to, -400);
     api.diaryList(serverCfg(), from, to).then(function (res) {
       if (!res || res.error || res.offline || !res.data) return;
@@ -2484,8 +2548,12 @@
         syncHash();
         render();
         window.scrollTo(0, 0);
-        // 进「好友」页顺手问一次服务器有没有新的请求
-        if (state.view === 'social') refreshFriendRequests(true);
+        // 切标签时顺手把这一页需要的服务器数据补一次（节流在 due() 里，
+        // 来回点不会把同一个请求打很多遍）。以前什么都不拉，所以「切过去
+        // 还是老数据，得退出去重进」。
+        if (state.view === 'social') refreshSocial(false);
+        else if (state.view === 'today') { pullDiary(true); }
+        else if (state.view === 'me') { pullProfile(true); }
         break;
       case 'pick-date': {
         var dd = el.getAttribute('data-date');
@@ -2742,6 +2810,11 @@
       case 'open-friend':
         openFriend(el.getAttribute('data-id'));
         break;
+      case 'refresh-social':
+        if (!serverOn() || !state.server.token) { toast('先登录服务器才能刷新'); break; }
+        toast('正在刷新…');
+        refreshSocial(true).then(function () { toast('已刷新'); }, function () { toast('刷新失败，网络好像不通'); });
+        break;
       case 'add-friend': {
         var conn = serverOn() && state.server.token;
         var body = conn
@@ -2983,16 +3056,19 @@
     // 登录状态下开 App 就补一次当天记录的同步：上次退出时可能没网，或者
     // 记录是在另一台设备上改的。静默进行，失败会自己退避重试。
     if (autoSyncReady() && !/[?&]debug=1/.test(search)) {
-      setTimeout(function () { doBackgroundSync(); }, 3000);
-      // 再拉一次服务器上的记录：换过手机、或者在另一台设备上改过，都要能对上
-      setTimeout(function () { pullDiary(true); }, 5000);
-      // 身体档案和体重也拉一次（比记录晚半秒，别抢同一个连接）
-      setTimeout(function () { pullProfile(true); }, 5500);
-      // 好友请求：开机问一次，之后每分钟问一次（对方加你，你这边要在几分钟内看见）
-      setTimeout(function () { refreshFriendRequests(true); }, 6500);
+      // 以前是 3s / 5s / 5.5s / 6.5s 一串错开的定时器，等于打开 App 后
+      // 六七秒才开始有数据。现在基本同时发（节流表保证不会重复打），
+      // 冷启动时也能第一屏就把请求放出去。
+      setTimeout(function () { doBackgroundSync(); }, 400);
+      setTimeout(function () { pullDiary(true); }, 600);
+      setTimeout(function () { pullProfile(true); }, 900);
+      setTimeout(function () { refreshFriendRequests(true); }, 1200);
       if (!window.__reqTimer) {
         window.__reqTimer = setInterval(function () {
-          if (serverOn() && state.server.token) refreshFriendRequests(true);
+          if (serverOn() && state.server.token) {
+            refreshFriendRequests(true);
+            pullFriends('');       // 对方同意了，我这边最多 60 秒就能看到
+          }
         }, 60000);
       }
     }
@@ -3129,12 +3205,12 @@
       render();
       toast(isRegister ? '注册成功，已登录' : '登录成功');
       // 登进来就把记录同步走（本机推上去 + 服务器上的拉下来）
-      pullDiary(true);
+      pullDiary(true, true);
       pullProfile(true);
-      pullFriends();
+      pullFriends('', true);
       // 连上了才去拉动态；这一步失败也不该把用户卡在引导页
       refreshFeed();
-      refreshFriendRequests(true);
+      refreshFriendRequests(true, true);
     });
   }
 
@@ -3180,6 +3256,13 @@
         return !!el && el.innerHTML.length;
       },
       theme: function (id, mode) { state.theme = id; state.mode = mode || state.mode; window.applyTheme(state.theme, state.mode); save(); render(); },
+      /* 测试用：手动触发一次拉取，验证「对方同意后我这边能补上好友」 */
+      refresh: function (which) {
+        if (which === 'social') return refreshSocial(true);
+        if (which === 'requests') return refreshFriendRequests(true, true);
+        if (which === 'friends') return pullFriends('', true);
+        return refreshSocial(true);
+      },
       counts: function () {
         return { foods: window.FOODS.length, entries: state.entries.length, custom: state.custom.length, view: state.view };
       },

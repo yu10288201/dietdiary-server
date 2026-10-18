@@ -11,7 +11,9 @@
 (function (root) {
   'use strict';
 
-  var TIMEOUT_MS = 25000;
+  // 15 秒：Render 免费实例唤醒通常 30-60 秒，但那不该让界面白等 ——
+  // 超时后 request() 会自动把超时放宽一倍再试一次，用户看到的是「转一下就好」。
+  var TIMEOUT_MS = 15000;
 
   function trimBase(url) {
     var u = String(url || '').trim();
@@ -165,34 +167,37 @@
     var headers = { 'Content-Type': 'application/json' };
     if (cfg.token) headers.Authorization = 'Bearer ' + cfg.token;
     var body = opts.body === undefined ? null : JSON.stringify(opts.body);
+    var method = opts.method || 'GET';
+    // 只重试「安全」的方法：GET/PUT 重发不会多出一条记录，
+    // POST（发动态、点赞）重发会重复，宁可让用户自己再点一次。
+    var mayRetry = method === 'GET' || method === 'PUT';
 
-    var ctrl = null;
-    var timer = null;
-    var init = { method: opts.method || 'GET', headers: headers, cache: 'no-store' };
-    if (body) init.body = body;
-    if (typeof root.AbortController === 'function') {
-      ctrl = new root.AbortController();
-      init.signal = ctrl.signal;
-      timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || TIMEOUT_MS);
+    function attempt(timeoutMs, isRetry) {
+      var ctrl = null;
+      var timer = null;
+      var init = { method: method, headers: headers, cache: 'no-store' };
+      if (body) init.body = body;
+      if (typeof root.AbortController === 'function') {
+        ctrl = new root.AbortController();
+        init.signal = ctrl.signal;
+        timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
+      }
+      return fetchJSON(url, init).then(function (res) {
+        if (timer) { clearTimeout(timer); timer = null; }
+        return { status: 200, data: res.data };
+      }).catch(function (err) {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (err && err.status) return { status: err.status, error: err.message, data: err.data };
+        var aborted = err && err.name === 'AbortError';
+        // 超时 / 断网：先自己再试一次（超时放宽一倍），多半是免费实例刚被唤醒
+        if (!isRetry && mayRetry) return attempt(timeoutMs * 2, true);
+        var msg = aborted
+          ? '连接超时（免费实例可能正在唤醒，再试一次）' : '连不上服务器';
+        return { error: msg, network: true, detail: String(err && err.message || err) };
+      });
     }
 
-    return new Promise(function (resolve) {
-      function done(result) {
-        if (timer) { clearTimeout(timer); timer = null; }
-        resolve(result);
-      }
-      fetchJSON(url, init).then(function (res) {
-        done({ status: 200, data: res.data });
-      }).catch(function (err) {
-        if (err && err.status) {
-          done({ status: err.status, error: err.message, data: err.data });
-          return;
-        }
-        var msg = (err && err.name === 'AbortError')
-          ? '连接超时（免费实例可能正在唤醒，再试一次）' : '连不上服务器';
-        done({ error: msg, network: true, detail: String(err && err.message || err) });
-      });
-    });
+    return attempt(opts.timeout || TIMEOUT_MS, false);
   }
 
   var api = {
