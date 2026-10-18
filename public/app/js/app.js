@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.5.9';
-  var APP_VERSION_CODE = 1000007;
+  var APP_VERSION = '0.6.0';
+  var APP_VERSION_CODE = 1000008;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -803,7 +803,7 @@
   function viewFoods() {
     var list = foodList();
 
-    var html = topbar('食物库', list.length + ' 种食物 · 数据每 100g',
+    var html = topbar('食物库', list.length + ' 种食物 · 每份热量',
       '<button class="icon-btn" data-act="fav-toggle">' + svg('star') + '</button>');
 
     html += '<div class="screen has-topbar">';
@@ -891,15 +891,40 @@
   function chip(label, on, cat) {
     return '<button class="chip' + (on ? ' on' : '') + '" data-act="cat" data-cat="' + esc(cat || label) + '">' + esc(label) + '</button>';
   }
+  // 一条食物该怎么报数：有自然单位（个/袋/桶/份…）而且不是 100 克一份的，
+  // 直接给「整份多少千卡」，省得用户对着「每 100g 491 kcal」自己乘 105 克。
+  // 没有自然单位（鸡胸肉、米饭这种按克称的）还是按 100g 报。
+  // 一条食物该怎么报数：食物库里的条目都带自然单位（个/碗/份/片/袋/桶…），
+  // 直接给「整份多少千卡」，省得用户对着「每 100g 491 kcal」自己乘 105 克。
+  // 只有「克」这种没有自然单位的（现在没有）才回落到每 100g。
+  function servingOf(f) {
+    if (f.ps) return { kcal: f.e, unit: '', grams: 0, perServing: true };
+    var w = Number(f.w) || 100;
+    if (!f.u || f.u === '克') return null;
+    return { kcal: f.e * w / 100, unit: f.u, grams: w, perServing: false };
+  }
+  // 元信息只有一行的地方（食物库列表），别把「219g」也塞进去 ——
+  // 多一个字就会折行，折在「脂 / 11.9」中间，比不写还难看。克数点开就有。
   function foodRow(f, mine) {
     var fav = state.favorites.indexOf(f.n) >= 0;
+    var srv = servingOf(f);
+    var nut = '碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f);
+    var meta, tail;
+    if (srv && srv.perServing) {
+      meta = esc(f.c) + ' · 整份 · ' + nut;
+      tail = '<b>' + r0(srv.kcal) + '</b>kcal';
+    } else if (srv) {
+      meta = esc(f.c) + ' · 1' + esc(srv.unit) + ' · ' + nut;
+      tail = '<b>' + r0(srv.kcal) + '</b>kcal<span class="per">/' + esc(srv.unit) + '</span>';
+    } else {
+      meta = esc(f.c) + ' · 每100g ' + nut;
+      tail = '<b>' + r0(f.e) + '</b>kcal';
+    }
     return '<div class="row" data-act="food-detail" data-name="' + esc(f.n) + '">' +
       '<div class="thumb">' + foodEmoji(f.n, f.c) + '</div>' +
       '<div class="body"><div class="title">' + (fav ? '<span class="star">★</span> ' : '') + esc(f.n) + (mine ? ' <span class="small muted">自定义</span>' : '') + '</div>' +
-      '<div class="meta">' + esc(f.c) + ' · ' +
-        (f.ps ? '按份记 · 碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f)
-              : '每100g 碳' + f1(f.ch) + ' 蛋' + f1(f.p) + ' 脂' + f1(f.f)) + '</div></div>' +
-      '<div class="tail"><b>' + r0(f.e) + '</b>kcal</div></div>';
+      '<div class="meta">' + meta + '</div></div>' +
+      '<div class="tail">' + tail + '</div></div>';
   }
 
   /* -------- 好友 ------------------------------------------------------- */
@@ -1296,10 +1321,12 @@
     });
     if (!list.length) return '<div class="row"><div class="body muted">没有找到，试试「新建自定义食物」</div></div>';
     return list.slice(0, 200).map(function (f) {
+      var srv = servingOf(f);
+      var kcalTxt = srv ? r0(srv.kcal) + ' kcal' + (srv.unit ? '/' + esc(srv.unit) : '') : '每100g ' + r0(f.e) + 'kcal';
       return '<div class="row" data-act="pick" data-name="' + esc(f.n) + '">' +
         '<div class="thumb">' + foodEmoji(f.n, f.c) + '</div>' +
         '<div class="body"><div class="title">' + esc(f.n) + '</div>' +
-        '<div class="meta">' + esc(f.c) + ' · 每100g ' + r0(f.e) + 'kcal</div></div>' +
+        '<div class="meta">' + esc(f.c) + ' · ' + kcalTxt + '</div></div>' +
         '<div class="tail">' + svg('plus') + '</div></div>';
     }).join('');
   }

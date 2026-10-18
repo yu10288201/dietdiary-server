@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  1000007,
-                    "versionName":  "0.5.9",
+                    "versionCode":  1000008,
+                    "versionName":  "0.6.0",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "食物库涨到 238 种：加了 15 种具体牌子的泡面（康师傅、统一、白象、今麦郎、日清、农心、三养、五谷道场、拉面说），按一袋/一桶计热量。新建自定义食物默认按「这一份」填，点了这顿吃了多少就填多少，不用换算每 100 克；食物库里的自定义食物默认收起。切页面、开浮层、点按钮都加了过渡动效，写盘和搜索做了合并，翻页更快。",
+                    "notes":  "食物库列表改成按份报热量：以前一律写「每 100g 491 kcal」，现在直接写「512 kcal/个」「516 kcal/袋」，一眼就知道吃一份是多少；点进去仍然能看到每 100 克的碳蛋脂。",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-18T06:35:36Z",
+                    "publishedAt":  "2026-10-18T06:55:45Z",
                     "channel":  "stable",
-                    "sha256":  "d96cf3de81cc33b525a3db485f8dddc084a4e3bec88b9893d9fb006c0b5c5a17",
+                    "sha256":  "7748f3a306a27fcf7aef54f8f2808b06cd63a408f42d9de637d4bfa77d59bf24",
                     "size":  144665
                 }
 }
