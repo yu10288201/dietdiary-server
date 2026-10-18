@@ -517,7 +517,7 @@ app.get('/api/users/by-uid/:uid', requireAuth, h(async (req, res) => {
 
 app.get('/api/friends', requireAuth, h(async (req, res) => {
   const rows = await all(
-    `SELECT u.id, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at, f.updated_at
+    `SELECT u.id, u.uid, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at, f.updated_at
        FROM friendships f
        JOIN users u
          ON u.id = CASE WHEN f.requester_id = ? THEN f.addressee_id ELSE f.requester_id END
@@ -598,7 +598,7 @@ app.post('/api/friends/request', requireAuth, h(async (req, res) => {
 app.get('/api/friends/requests', requireAuth, h(async (req, res) => {
   const incoming = await all(
     `SELECT f.id, f.requester_id AS other_id, f.created_at, f.updated_at,
-            u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at AS user_created_at
+            u.uid, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at AS user_created_at
        FROM friendships f JOIN users u ON u.id = f.requester_id
       WHERE f.addressee_id = ? AND f.status = 'pending'
       ORDER BY f.created_at DESC`,
@@ -606,7 +606,7 @@ app.get('/api/friends/requests', requireAuth, h(async (req, res) => {
   );
   const outgoing = await all(
     `SELECT f.id, f.addressee_id AS other_id, f.created_at, f.updated_at,
-            u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at AS user_created_at
+            u.uid, u.username, u.display_name, u.avatar_color, u.goal_text, u.created_at AS user_created_at
        FROM friendships f JOIN users u ON u.id = f.addressee_id
       WHERE f.requester_id = ? AND f.status = 'pending'
       ORDER BY f.created_at DESC`,
@@ -620,6 +620,7 @@ app.get('/api/friends/requests', requireAuth, h(async (req, res) => {
     updatedAt: Number(row.updated_at),
     user: toPublicUser({
       id: row.other_id,
+      uid: row.uid,
       username: row.username,
       display_name: row.display_name,
       avatar_color: row.avatar_color,
@@ -1114,6 +1115,62 @@ app.get('/api/download/apk', (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="shike.apk"');
   res.setHeader('Cache-Control', 'no-cache');
   fs.createReadStream(file).pipe(res);
+});
+
+// ------------------------------------------------------------ /app 网页版
+//
+// 同一套前端文件（app/assets/www）在发版时会被拷到 server/public/app，
+// 于是 iPhone 用户可以直接用 Safari 打开 https://<服务>/app 并「添加到主屏幕」。
+// 这里只做静态托管：不需要登录态、没有服务端渲染，数据仍然走 /api/*。
+const WEB_DIR = path.join(HERE, '..', 'public', 'app');
+app.use('/app', express.static(WEB_DIR, {
+  // index.html 和 sw.js 不能被长缓存，否则发了新版用户还是旧界面
+  setHeaders(res, filePath) {
+    if (/index\.html$|sw\.js$|manifest\.webmanifest$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+    }
+  }
+}));
+app.get('/app', (req, res) => res.redirect('/app/'));
+app.get('/app/', (req, res) => {
+  const indexPath = path.join(WEB_DIR, 'index.html');
+  if (!fs.existsSync(indexPath)) {
+    return res.status(404).json({ error: '网页版还没发布，先用 /api/download/apk 装 Android 版' });
+  }
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(indexPath);
+});
+// 一个很短的落地页：给不想装 APK 的人一个入口（也方便发链接/二维码）
+app.get('/download', (req, res) => {
+  const v = versionPayload();
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('html').send(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>食刻 · 下载</title>
+<style>body{font-family:-apple-system,"PingFang SC",system-ui,sans-serif;margin:0;padding:36px 22px;
+background:#F4F6F3;color:#1B1F1C}main{max-width:460px;margin:0 auto}
+h1{font-size:26px;margin:0 0 6px}p{color:#5C665E;line-height:1.6;font-size:14.5px}
+.card{background:#fff;border-radius:16px;padding:18px;margin:18px 0;box-shadow:0 8px 24px -18px #0006}
+a.btn{display:block;text-align:center;background:#4F7F52;color:#fff;text-decoration:none;
+padding:14px;border-radius:13px;font-weight:700;margin-top:6px}
+a.ghost{background:#EDF1EA;color:#3D4A3F}
+code{background:#EDF1EA;padding:2px 6px;border-radius:6px;font-size:12.5px}</style></head>
+<body><main>
+<h1>食刻</h1>
+<p>记录每一餐。当前版本 <b>v${v.versionName}</b>（${Math.round((v.size || 0) / 1024)} KB）。</p>
+<div class="card">
+  <p><b>Android</b>：下载安装包，覆盖安装不会丢记录。</p>
+  <a class="btn" href="/api/download/apk">下载 APK</a>
+</div>
+<div class="card">
+  <p><b>iPhone / 电脑</b>：直接用网页版。Safari 里点分享 → 「添加到主屏幕」，
+  就会像 App 一样有图标、全屏打开。</p>
+  <a class="btn ghost" href="/app/">打开网页版</a>
+</div>
+<p style="font-size:12.5px">链接永久有效：<code>${req.protocol}://${req.get('host')}/download</code></p>
+</main></body></html>`);
 });
 
 // -------------------------------------------------------------- 兜底处理

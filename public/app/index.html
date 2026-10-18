@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#4F7F52">
+<meta name="format-detection" content="telephone=no">
+<!-- 网页版（PWA）：iPhone 用 Safari「添加到主屏幕」后就像个 App。APK 里这几行无害。 -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="食刻">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="img/icon-192.png">
+<link rel="apple-touch-icon" href="img/icon-180.png">
+<title>食刻</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <main id="view" class="screen"></main>
+  <nav id="tabbar" class="tabbar"></nav>
+</div>
+
+<!-- 首次打开：独立整页的注册/登录。没登录就是这一屏，盖住整个 App。 -->
+<div id="onboard" class="onboard hidden"></div>
+
+<button id="fab" class="fab hidden" aria-label="记录一笔"></button>
+
+<div id="scrim" class="scrim hidden"></div>
+<div id="sheet" class="sheet"></div>
+<div id="toast" class="toast"></div>
+
+<script src="js/data.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
