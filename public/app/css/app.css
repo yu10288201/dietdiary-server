@@ -669,3 +669,34 @@ body.dark .barchart .bar { background: linear-gradient(var(--brand), var(--brand
     transition-duration: .001ms !important;
   }
 }
+
+/* ---------------------------------------------------- 拍照识别（AI）
+ * 文件输入框不能 display:none —— 老 WebView 里被隐藏的 input 点不动，
+ * 挪到屏幕外用 clip 的方式最稳。
+ * ---------------------------------------------------------------------- */
+.recog-file {
+  position: absolute; left: -9999px; top: 0;
+  width: 1px; height: 1px; opacity: 0;
+}
+.recog-photo {
+  margin-top: 10px; border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2);
+}
+.recog-photo img { display: block; width: 100%; max-height: 46vh; object-fit: cover; }
+.recog-tag {
+  display: inline-block; margin-left: 5px; padding: 1px 6px;
+  font-size: 11px; font-weight: 600; border-radius: 999px;
+  vertical-align: 1px; white-space: nowrap;
+}
+.recog-tag.db { background: var(--brand-soft); color: var(--brand); }
+.recog-tag.ai { background: rgba(242,153,74,.16); color: #C97A2B; }
+body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
+
+/* ------------------------------------------------- 一条记录的「备注」
+ * 标题 + 营养那行已经塞满了，备注再挤进 .meta 就只能看半句。
+ * 单独一行，太长就省略号，不折行（折行会把每张卡片撑高）。
+ * ---------------------------------------------------------------------- */
+.entry .note {
+  font-size: 11.5px; color: var(--text-3); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

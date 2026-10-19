@@ -57,6 +57,23 @@
       String(today.getDate()).padStart(2, '0');
     var kcal = [1480, 2610, 1720];
 
+    if (path.indexOf('/api/recognize/status') === 0) {
+      return { data: { ok: true, enabled: true, mock: false, model: 'demo', remainingToday: 5, dailyLimit: 5 } };
+    }
+    if (path.indexOf('/api/recognize') === 0) {
+      // 离线演示：假装看了一张「一荤一素加碗饭」的桌子。
+      // 第三条故意用库里没有的名字，好把「AI 估算」这条分支也演示出来。
+      return {
+        data: {
+          ok: true, model: 'demo', remainingToday: 4, dailyLimit: 5, elapsedMs: 900, note: '演示数据',
+          items: [
+            { name: '米饭', grams: 200, kcal100: 116, protein100: 2.6, fat100: 0.3, carbs100: 25.9, confidence: 'high' },
+            { name: '番茄炒蛋', grams: 180, kcal100: 120, protein100: 6, fat100: 8, carbs100: 6, confidence: 'mid' },
+            { name: '清蒸鲈鱼', grams: 150, kcal100: 105, protein100: 18.6, fat100: 3.4, carbs100: 0, confidence: 'low' }
+          ]
+        }
+      };
+    }
     if (path.indexOf('/api/friends/requests') === 0) {
       // 演示数据里放一条待处理请求，好让「接受 / 拒绝」这条链在无网络时也能看到
       return {
@@ -170,7 +187,8 @@
     var method = opts.method || 'GET';
     // 只重试「安全」的方法：GET/PUT 重发不会多出一条记录，
     // POST（发动态、点赞）重发会重复，宁可让用户自己再点一次。
-    var mayRetry = method === 'GET' || method === 'PUT';
+    // 例外是带 clientId 的 POST：服务端认得这个 id，重发只会拿回同一次结果。
+    var mayRetry = method === 'GET' || method === 'PUT' || !!opts.idempotent;
 
     function attempt(timeoutMs, isRetry) {
       var ctrl = null;
@@ -296,6 +314,20 @@
     },
 
     cheers: function (cfg) { return request(cfg, '/api/cheers'); },
+
+    /**
+     * 拍照识别。payload = { image: 'data:image/jpeg;base64,...', meal }
+     * 返回 { items: [{name, grams, kcal100, protein100, fat100, carbs100, confidence}], note }
+     * 超时给到 60 秒：免费实例冷启动 + 视觉模型本身慢，15 秒会误判成失败。
+     */
+    recognize: function (cfg, payload) {
+      // payload.clientId 让服务端认得出「这是同一次识别」，断了重发不会扣两次次数
+      var idem = !!(payload && payload.clientId);
+      return request(cfg, '/api/recognize', { method: 'POST', body: payload, timeout: 60000, idempotent: idem });
+    },
+
+    /** 识别功能是否可用（服务端有没有配 Key / 今天还剩几次） */
+    recognizeStatus: function (cfg) { return request(cfg, '/api/recognize/status'); },
 
     /**
      * 检查更新。baseUrl 为空时走「离线清单」：让调用方回退到 GitHub 直链。

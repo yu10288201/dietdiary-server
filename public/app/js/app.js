@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.6.0';
-  var APP_VERSION_CODE = 1000008;
+  var APP_VERSION = '0.7.2';
+  var APP_VERSION_CODE = 1000011;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -220,20 +220,52 @@
     return out;
   }
 
+  /* 「吃了多少」是个 0–1 的比例，缺省 1。
+   * 为什么不干脆让用户把克数改小：点了一份 500 g 的外卖只吃一半的时候，
+   * 「这份有 500 g」和「我吃了 250 g」是两条不同的信息 —— 前者配上价格才
+   * 对得上“花了多少钱”，后者才是真实摄入。老记录没有 eat 字段，一律当全吃了。 */
+  function eatenOf(e) {
+    var v = Number(e && e.eat);
+    return (isFinite(v) && v > 0 && v <= 1) ? v : 1;
+  }
+  /* 「吃了多少」的人话说法，给列表和面板共用 */
+  function eatLabel(v) {
+    if (v >= 1) return '全部';
+    if (Math.abs(v - 0.5) < 0.02) return '一半';
+    if (Math.abs(v - 1 / 3) < 0.02) return '三分之一';
+    if (Math.abs(v - 0.25) < 0.02) return '四分之一';
+    return Math.round(v * 100) + '%';
+  }
   function recalc(entry) {
-    var k = (entry.grams || 0) / 100;
+    /* 热量按「实际吃进去的克数」算：分量 × 吃了多少 */
+    var k = ((entry.grams || 0) * eatenOf(entry)) / 100;
     entry.kcal = r0(entry.per100.e * k);
     entry.p = r1(entry.per100.p * k);
     entry.f = r1(entry.per100.f * k);
     entry.ch = r1(entry.per100.ch * k);
     return entry;
   }
+  /* 一顿/一天花了多少钱。只统计填了价格的条目，没填的不算 0 元。 */
+  function spentOf(list) {
+    var total = 0, counted = 0;
+    for (var i = 0; i < list.length; i++) {
+      var p = Number(list[i] && list[i].price);
+      if (isFinite(p) && p > 0) { total += p; counted++; }
+    }
+    return { total: r1(total), counted: counted };
+  }
+  /* 钱的写法：18 不写成 18.00，18.5 写成 18.5，18.55 写成 18.55 */
+  function money(v) {
+    var n = Math.round((Number(v) || 0) * 100) / 100;
+    return (n % 1 === 0) ? String(n) : String(n).replace(/0+$/, '');
+  }
   function makeEntry(date, food, meal, grams, unit, qty) {
     var e = {
       id: uid(), date: date, meal: meal, foodId: food.n, name: food.n, cat: food.c,
       unit: unit || '克', qty: qty == null ? grams : qty, grams: grams,
       per100: { e: food.e, p: food.p, f: food.f, ch: food.ch },
-      kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now()
+      kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now(),
+      eat: 1, price: 0, note: ''
     };
     return recalc(e);
   }
@@ -389,6 +421,18 @@
       sheetCloseTimer = null;
     }, 280);
     sheetOpen = null;
+  }
+
+  /* #sheet 是常驻 DOM 节点：innerHTML 换掉、节点本身不变。所以每次打开面板都
+     addEventListener 的话，监听器会一直累加——份量面板的加号点一次却加了 5，
+     就是前面开过 5 次留下的 5 个监听都在跑。这里改挂到「每次新生成」的
+     .sheet-body / .sheet-foot 上，旧节点被 innerHTML 换掉时监听随之消失。 */
+  function bindSheet(type, fn) {
+    var sheet = $('#sheet');
+    var body = sheet.querySelector('.sheet-body');
+    var foot = sheet.querySelector('.sheet-foot');
+    if (body) body.addEventListener(type, fn);
+    if (foot) foot.addEventListener(type, fn);
   }
 
   /* ------------------------------------------------------------ views */
@@ -560,10 +604,17 @@
       '</div>';
     for (var i = 0; i < list.length; i++) {
       var e = list[i];
+      var ate = eatenOf(e);
       html += '<div class="entry anim" data-act="edit-entry" data-id="' + e.id + '">' +
         '<div class="thumb">' + foodEmoji(e.name, e.cat) + '</div>' +
         '<div class="body"><div class="title">' + esc(e.name) + '</div>' +
-        '<div class="meta">' + f1(e.qty) + e.unit + ' · ' + r0(e.grams) + 'g · 碳' + f1(e.ch) + ' 蛋' + f1(e.p) + ' 脂' + f1(e.f) + '</div></div>' +
+        '<div class="meta">' + f1(e.qty) + e.unit + ' · ' + r0(e.grams) + 'g' +
+        (ate < 1 ? ' · 吃了' + eatLabel(ate) : '') +
+        ' · 碳' + f1(e.ch) + ' 蛋' + f1(e.p) + ' 脂' + f1(e.f) +
+        (Number(e.price) > 0 ? ' · ¥' + money(e.price) : '') +
+        '</div>' +
+        (e.note ? '<div class="note">' + esc(e.note) + '</div>' : '') +
+        '</div>' +
         '<div class="kcal">' + e.kcal + '<span>kcal</span></div></div>';
     }
     html += '<button class="add-line" data-act="add-food" data-meal="' + meal.id + '">' + svg('plus') + ' 添加到' + meal.name + '</button>';
@@ -734,8 +785,18 @@
       stat('超标天数', overDays, '天') +
       '</div>' +
       '<div class="small muted mt12">达标 ' + goodDays + ' 天 · 超标 ' + overDays + ' 天 · 吃太少 ' + lowDays + ' 天 · 没记录 ' + (daysInMonth - listed) + ' 天</div>' +
+      '<div class="small muted mt8">' + monthSpendText() + '</div>' +
       '</div>';
     return html;
+  }
+
+  /* 本月在吃上花了多少（只统计填了价格的条目） */
+  function monthSpendText() {
+    var ym = state.month;
+    var list = state.entries.filter(function (e) { return String(e.date || '').slice(0, 7) === ym; });
+    var sp = spentOf(list);
+    if (!sp.counted) return '这月还没记过价格 —— 在份量面板填「花了多少钱」，这里就能统计。';
+    return '这月吃饭花了 ¥' + money(sp.total) + '（' + sp.counted + ' 条记了价格）';
   }
 
   function legendItem(color, label) {
@@ -766,6 +827,15 @@
       '<span class="small ' + (left >= 0 ? 'muted' : 'warn-text') + '">' +
       (left >= 0 ? '还可摄入 ' + left + ' kcal' : '超出 ' + Math.abs(left) + ' kcal') + '</span></div>';
 
+    /* 花了多少钱：只算填了价格的条目，没填的不当作 0 元 */
+    var sp = spentOf(list);
+    if (sp.counted) {
+      var noPrice = list.length - sp.counted;
+      body += '<div class="row-between mt8"><span class="small muted">这天花了</span>' +
+        '<span class="small"><b>¥' + money(sp.total) + '</b>' +
+        (noPrice > 0 ? '<span class="muted"> · ' + noPrice + ' 条没填价格</span>' : '') + '</span></div>';
+    }
+
     if (!list.length) {
       body += '<div class="card center muted mt12">这天还没有记录</div>';
     } else {
@@ -778,10 +848,13 @@
           '<b>' + sub.kcal + ' kcal</b></div>';
         for (var j = 0; j < items.length; j++) {
           var e2 = items[j];
+          var ate2 = eatenOf(e2);
+          var am = (ate2 < 1 ? '吃' + eatLabel(ate2) + ' ' : '') +
+            (Number(e2.price) > 0 ? '¥' + money(e2.price) : '');
           body += '<div class="dm-row" data-act="edit-entry" data-id="' + e2.id + '">' +
             '<span class="ic">' + foodEmoji(e2.name, e2.cat) + '</span>' +
             '<span class="nm">' + esc(e2.name) + '</span>' +
-            '<span class="am">' + esc(e2.amount) + '</span>' +
+            '<span class="am">' + am + '</span>' +
             '<span class="kc">' + r0(e2.kcal) + '</span></div>';
         }
         body += '</div>';
@@ -1157,6 +1230,24 @@
         : (delta > 0 ? '+' : '') + delta.toFixed(1) + ' kg（' + state.weights.length + ' 次记录）') +
       '</div></div>' + weightCurve() + '</div>';
 
+    // 账号：换手机、换服务器、换人都要从这里出去。以前只有「设置 → 社交服务器
+    // → 退出登录」这一条路，藏三层，换账号等于玩寻宝。
+    html += '<div class="card"><div class="card-head"><h2>账号</h2></div>';
+    if (serverOn()) {
+      html += '<div class="brow"><span>当前账号</span><b>' +
+        esc(state.server.displayName || state.server.uid || '已登录') + '</b></div>' +
+        '<div class="brow"><span>数据存在</span><b>' +
+        esc(state.server.baseUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '')) + '</b></div>' +
+        '<div class="row-between" style="margin-top:10px;gap:8px">' +
+        '<button class="btn small ghost" data-act="switch-account">切换账号</button>' +
+        '<button class="btn small danger" data-act="logout-account">退出登录</button>' +
+        '</div>';
+    } else {
+      html += '<div class="small muted">还没登录。登录后记录会同步到服务器，换手机能找回来。</div>' +
+        '<button class="btn small" data-act="server" style="margin-top:10px">登录 / 注册</button>';
+    }
+    html += '</div>';
+
     // 主题色、深色模式、服务器、导出、更新、关于这些低频项全部收进右上角「设置」，
     // 主页面只留「我是谁 / 目标多少 / 身体什么情况」这三件事。
     html += '<div class="center small muted" style="padding:6px 0 4px">' + APP_NAME + ' v' + APP_VERSION +
@@ -1296,7 +1387,8 @@
       window.CATEGORIES.map(function (c) { return chip(c.emoji + ' ' + c.id, false, c.id); }).join('') + '</div>';
     body += '<div class="list" id="pick-list">' + pickListHtml('', '全部') + '</div>';
 
-    var foot = '<button class="btn ghost" data-act="new-food">' + '＋ 新建自定义食物</button>';
+    var foot = '<button class="btn ghost" data-act="recognize">📷 拍照识别</button>' +
+      '<button class="btn ghost" data-act="new-food">' + '＋ 新建自定义食物</button>';
     var sheet = openSheet('选择食物 · 加入' + mealName(picker.meal), body, foot);
 
     var input = $('#pick-search', sheet);
@@ -1371,6 +1463,27 @@
         : '<div class="field"><label>折算重量（克）</label>' +
           '<input class="input" id="in-grams" type="number" inputmode="decimal" value="' + Math.round(d.grams) + '">' +
           '<div class="small muted mt8">每 100g：' + r0(d.per100.e) + ' kcal · 碳 ' + f1(d.per100.ch) + ' · 蛋 ' + f1(d.per100.p) + ' · 脂 ' + f1(d.per100.f) + '</div></div>') +
+      (d.recog
+        ? '<div class="field"><div class="small muted">' +
+          (d.recog === 'db'
+            ? '✓ 这项是按菜名在食物库里对上的，营养值来自成分表。'
+            : '⚠️ 食物库里没有这道菜，数值是模型估的，误差可能不小。') +
+          '</div></div>'
+        : '') +
+      '<div class="field"><label>吃了多少</label><div class="quick">' +
+      [[1, '全部'], [0.5, '一半'], [1 / 3, '三分之一'], [0.25, '四分之一']].map(function (p) {
+        var on = Math.abs(eatenOf(picker.draft) - p[0]) < 0.02;
+        return '<button data-act="eat" data-v="' + p[0] + '" class="' + (on ? 'on' : '') + '" style="' +
+          (on ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' + p[1] + '</button>';
+      }).join('') +
+      '</div><div class="small muted mt8" id="eat-hint"></div></div>' +
+      '<div class="field"><label>花了多少钱（元，可不填）</label>' +
+      '<input class="input" id="in-price" type="number" inputmode="decimal" step="0.5" placeholder="比如 18" value="' +
+      (Number(d.price) > 0 ? Number(d.price) : '') + '">' +
+      '<div class="small muted mt8">填了才能统计「今天/这月吃了多少钱」。自己做的饭留空就行。</div></div>' +
+      '<div class="field"><label>备注（可不填）</label>' +
+      '<input class="input" id="in-note" type="text" maxlength="120" placeholder="在哪买的、和谁吃、味道怎么样…" value="' +
+      esc(d.note || '') + '"></div>' +
       '<div class="field"><label>餐次</label><div class="quick">' +
       window.MEALS.map(function (m) { return '<button data-act="meal" data-m="' + m.id + '" style="' + (d.meal === m.id ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' + m.emoji + m.name + '</button>'; }).join('') +
       '</div></div>';
@@ -1393,15 +1506,23 @@
       preview();
     }
     function preview() {
-      var k = picker.draft.grams / 100;
+      var eat = eatenOf(picker.draft);
+      var k = (picker.draft.grams * eat) / 100;
       $('#pv-kcal', sheet).textContent = r0(picker.draft.per100.e * k);
       $('#pv-p', sheet).textContent = f1(picker.draft.per100.p * k);
       $('#pv-ch', sheet).textContent = f1(picker.draft.per100.ch * k);
       $('#pv-f', sheet).textContent = f1(picker.draft.per100.f * k);
+      var hint = $('#eat-hint', sheet);
+      if (hint) {
+        hint.textContent = eat >= 1
+          ? '整份都吃了。剩下了就选一半或更少，热量会跟着打折。'
+          : '这份 ' + Math.round(picker.draft.grams) + ' g，吃了 ' + eatLabel(eat) +
+            '（约 ' + Math.round(picker.draft.grams * eat) + ' g），上面的热量已经按吃了的量算。';
+      }
     }
     preview();
 
-    sheet.addEventListener('input', function (ev) {
+    bindSheet('input', function (ev) {
       var t = ev.target;
       if (t.id === 'in-qty') syncFromQtyUnit();
       else if (t.id === 'in-grams') {
@@ -1412,7 +1533,7 @@
         preview();
       }
     });
-    sheet.addEventListener('click', function (ev) {
+    bindSheet('click', function (ev) {
       var t = ev.target.closest('[data-act]');
       if (!t) return;
       var act = t.getAttribute('data-act');
@@ -1432,6 +1553,15 @@
           b.style.borderColor = on ? 'var(--brand)' : '';
         });
         syncFromQtyUnit();
+      } else if (act === 'eat') {
+        picker.draft.eat = parseFloat(t.getAttribute('data-v')) || 1;
+        $$('[data-act="eat"]', sheet).forEach(function (b) {
+          var on = Math.abs((parseFloat(b.getAttribute('data-v')) || 1) - eatenOf(picker.draft)) < 0.02;
+          b.style.background = on ? 'var(--brand)' : '';
+          b.style.color = on ? 'var(--brand-ink)' : '';
+          b.style.borderColor = on ? 'var(--brand)' : '';
+        });
+        preview();
       } else if (act === 'meal') {
         picker.draft.meal = t.getAttribute('data-m');
         $$('[data-act="meal"]', sheet).forEach(function (b) {
@@ -1453,7 +1583,8 @@
       id: uid(), date: state.date, meal: picker.meal, foodId: f.n, name: f.n, cat: f.c,
       unit: unit, qty: 1, grams: grams,
       per100: { e: f.e, p: f.p, f: f.f, ch: f.ch },
-      kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now()
+      kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now(),
+      eat: 1, price: 0, note: ''
     };
     recalc(picker.draft);
     openPortionSheet(false);
@@ -1462,6 +1593,15 @@
   function confirmEntry() {
     var d = picker.draft;
     if (!d || !(d.grams > 0)) { toast('请输入有效的重量'); return; }
+    /* 价格和备注只在点确认时读一次：在面板里打字不该触发重算热量。 */
+    var priceEl = $('#in-price');
+    var noteEl = $('#in-note');
+    if (priceEl) {
+      var pv = parseFloat(priceEl.value);
+      d.price = (isFinite(pv) && pv > 0) ? Math.round(pv * 100) / 100 : 0;
+    }
+    if (noteEl) d.note = String(noteEl.value || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    d.eat = eatenOf(d);
     recalc(d);
     var idx = -1;
     for (var i = 0; i < state.entries.length; i++) if (state.entries[i].id === d.id) idx = i;
@@ -1490,6 +1630,575 @@
     closeSheet();
     render();
     toast('已删除');
+  }
+
+  /* ---------------------------------------------------- 拍照识别（AI） */
+  /* 流程：拍照 → 本地压到长边 896px → POST /api/recognize（图片只发给自己的
+   * 服务器，Key 在服务器上）→ 服务端回「这是什么 + 大概多少克 + 每 100g 营养」
+   * → 这里再按菜名回本地 238 种食物库找精确值。
+   *
+   * 为什么不让模型直接给热量：它给的是「估计」，同一道番茄炒蛋能报出 90 和
+   * 160 kcal/100g 两个数，误差 ±30% 很常见。食物库里的数是抄成分表的。所以
+   * 能对上就用库里的，对不上才退回模型的数，并且明确标「AI 估算」。
+   */
+  var RECOG_EDGE = 896;        // 长边上限。再大只是多花 token，认菜没变准
+  var RECOG_QUALITY = 0.72;    // JPEG 质量：896px@0.72 大约 100–200 KB
+  var recogOut = null;         // 最近一次识别结果 { items, note, model }
+  var recogBusy = false;
+  var recogPending = null;     // 图糊/太暗时先攒着，等用户点「就这样识别」
+
+  /* 断了网的那张图先存起来，用户不用重新翻相册重拍。
+   * 只放一张（新的盖掉旧的），data URL 一百多 KB，localStorage 放得下。 */
+  var RECOG_STORE = 'shike_recog_pending';
+
+  function loadPendingPhoto() {
+    try { return window.localStorage.getItem(RECOG_STORE) || ''; } catch (e) { return ''; }
+  }
+  function savePendingPhoto(url) {
+    try {
+      if (url) window.localStorage.setItem(RECOG_STORE, url);
+      else window.localStorage.removeItem(RECOG_STORE);
+    } catch (e) { /* 隐私模式写不进去，不影响主流程 */ }
+  }
+  /* 幂等键：服务端认它，同一张图重发不会扣两次次数。 */
+  function newClientId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
+
+  /* 模型说的是人话（「白米饭」「西红柿炒鸡蛋」「听装可乐」），食物库里是规范名。
+   * 不先映射的话这些最常见的菜一律进「AI 估算」，白白丢掉精确值。
+   * 键必须已经过 normName（无括号、无空格）；值对不上就自然退化成模糊匹配。 */
+  var FOOD_ALIASES = {
+    '白米饭': '米饭（熟）', '米饭': '米饭（熟）', '大米饭': '米饭（熟）', '白饭': '米饭（熟）', '蒸米饭': '米饭（熟）',
+    '肉包': '包子（肉馅）', '包子': '包子（肉馅）', '水饺': '饺子（猪肉白菜）', '饺子': '饺子（猪肉白菜）',
+    '面条': '面条（熟）', '煮面': '面条（熟）', '汤面': '面条（熟）', '挂面': '挂面（干）',
+    '米粉': '米粉（干）', '白粥': '米粥', '大米粥': '米粥', '稀饭': '米粥', '小米': '小米粥',
+    '燕麦': '燕麦片（干）', '麦片': '燕麦片（干）', '燕麦片': '燕麦片（干）',
+    '面包': '全麦面包', '吐司': '全麦面包', '全麦吐司': '全麦面包', '烤面包': '全麦面包',
+    '玉米': '玉米（鲜）', '甜玉米': '玉米（鲜）', '水煮玉米': '玉米（鲜）',
+    '地瓜': '红薯', '烤红薯': '红薯', '马铃薯': '土豆', '土豆块': '土豆',
+    '意面': '意大利面（熟）', '意大利面': '意大利面（熟）', '藜麦': '藜麦（熟）', '煎饼果子': '煎饼',
+
+    '鸡胸': '鸡胸肉', '鸡脯肉': '鸡胸肉', '鸡腿': '鸡腿肉', '烤鸡腿': '鸡腿肉',
+    '鸡翅': '鸡翅', '烤翅': '鸡翅', '可乐鸡翅': '鸡翅', '鸡爪': '鸡爪', '凤爪': '鸡爪',
+    '蛋': '鸡蛋', '煮蛋': '鸡蛋', '水煮蛋': '鸡蛋', '白煮蛋': '鸡蛋', '煎蛋': '鸡蛋',
+    '荷包蛋': '鸡蛋', '炒蛋': '鸡蛋', '蒸蛋': '鸡蛋', '鸡蛋羹': '鸡蛋',
+    '蛋白': '鸡蛋白', '蛋清': '鸡蛋白', '蛋黄': '鸡蛋黄',
+    '松花蛋': '皮蛋', '猪肉': '猪肉（瘦）', '瘦肉': '猪肉（瘦）', '炒猪肉': '猪肉（瘦）',
+    '五花肉': '猪肉（五花肉）', '排骨': '猪排骨', '糖醋排骨': '猪排骨', '炖排骨': '猪排骨',
+    '牛肉': '牛肉（瘦）', '炒牛肉': '牛肉（瘦）', '牛排': '牛肉（瘦）',
+    '羊肉': '羊肉（瘦）', '烤羊肉': '羊肉（瘦）', '火腿': '火腿肠', '香肠': '香肠（腊肠）', '腊肠': '香肠（腊肠）',
+
+    '清蒸鱼': '鲈鱼', '蒸鱼': '鲈鱼', '清蒸鲈鱼': '鲈鱼', '烤鱼': '草鱼',
+    '虾': '基围虾', '大虾': '基围虾', '白灼虾': '基围虾', '水煮虾': '基围虾',
+    '蟹': '螃蟹', '生蚝': '牡蛎', '扇贝肉': '扇贝', '鱿鱼须': '鱿鱼',
+
+    '白菜': '白菜', '大白菜': '大白菜', '炒白菜': '大白菜', '青菜': '油菜', '小青菜': '油菜',
+    '西蓝花': '西兰花', '炒西兰花': '西兰花', '花菜': '菜花', '拍黄瓜': '黄瓜',
+    '西红柿': '番茄', '番茄块': '番茄', '红烧茄子': '茄子', '青椒丝': '青椒',
+    '洋葱丝': '洋葱', '四季豆': '豆角', '蘑菇': '香菇（鲜）', '香菇': '香菇（鲜）',
+    '小番茄': '圣女果', '圣女果': '圣女果', '鲜枣': '枣（鲜）',
+
+    '牛奶': '牛奶（全脂）', '纯牛奶': '牛奶（全脂）', '全脂牛奶': '牛奶（全脂）',
+    '脱脂牛奶': '牛奶（脱脂）', '酸奶': '酸奶（原味）', '原味酸奶': '酸奶（原味）',
+    '芝士': '奶酪（切达）', '奶酪': '奶酪（切达）', '奶粉': '奶粉（全脂）',
+
+    '豆腐': '豆腐（南豆腐）', '嫩豆腐': '豆腐（南豆腐）', '南豆腐': '豆腐（南豆腐）',
+    '豆干': '豆腐干', '豆腐干': '豆腐干', '豆浆': '豆浆（无糖）',
+    '花生': '花生（炒）', '炒花生': '花生（炒）', '核桃': '核桃仁', '瓜子': '瓜子（葵花籽）',
+    '葵花籽': '瓜子（葵花籽）',
+
+    '可口可乐': '可乐', '百事可乐': '可乐', '一听可乐': '可乐（听装 330 ml）',
+    '罐装可乐': '可乐（听装 330 ml）', '零度可乐': '无糖可乐（零度，听装 330 ml）',
+    '无糖可乐': '无糖可乐（零度，听装 330 ml）', '橙汁': '橙汁（鲜榨）',
+    '美式': '咖啡（美式）', '美式咖啡': '咖啡（美式）', '黑咖啡': '咖啡（美式）',
+    '咖啡': '咖啡（美式）', '拿铁': '拿铁咖啡', '咖啡拿铁': '拿铁咖啡',
+    '奶茶': '奶茶（珍珠）', '珍珠奶茶': '奶茶（珍珠）', '波霸奶茶': '奶茶（珍珠）',
+    '功能饮料': '运动饮料',
+
+    '饼干': '饼干（消化饼）', '曲奇': '曲奇饼干', '巧克力': '巧克力（牛奶）',
+    '雪糕': '冰淇淋', '蛋糕': '蛋糕（奶油）',
+
+    '汉堡': '汉堡包', '巨无霸': '巨无霸（麦当劳）', '炸鸡腿': '炸鸡（带皮）',
+    '炸鸡块': '炸鸡（带皮）', '炸鸡': '炸鸡（带皮）', '比萨': '披萨', '泡面': '方便面',
+    '蛋挞': '葡式蛋挞（肯德基）', '薯条': '薯条',
+
+    '西红柿炒蛋': '番茄炒蛋', '西红柿炒鸡蛋': '番茄炒蛋', '番茄炒鸡蛋': '番茄炒蛋',
+    '土豆丝': '酸辣土豆丝', '炒土豆丝': '酸辣土豆丝', '炒青菜': '清炒时蔬',
+    '宫爆鸡丁': '宫保鸡丁', '炒饭': '蛋炒饭'
+  };
+
+  // 「米饭（熟）」→「米饭」：括号里通常是做法/规格，比对时两边都去一次
+  function bareName(s) { return String(s || '').replace(/[（(].*$/, ''); }
+
+  function normName(s) {
+    return String(s || '')
+      .replace(/[（()）【】\[\]·・,，。、\s]/g, '')
+      .replace(/^(一份|一碗|一盘|一个|一只|一杯|一盒|约|大概|适量)/, '');
+  }
+
+  // 「清蒸鲈鱼」剥成「鲈鱼」再比。做法前缀是最常见的一层壳，不剥的话
+  // 模型说「清蒸鲈鱼」就永远对不上库里的「鲈鱼」。
+  var RECOG_METHODS = /^(清蒸|清炒|清炖|水煮|红烧|凉拌|爆炒|干煸|干锅|香煎|油炸|糖醋|蒜蓉|麻辣|白灼|小炒|铁板|炭烤|烧烤|炝|汆|蒸|煮|炒|炸|煎|炖|焖|拌|烤|烧|卤)/;
+
+  function stripMethod(s) {
+    var out = s, t;
+    for (var i = 0; i < 3; i++) {
+      t = out.replace(RECOG_METHODS, '');
+      if (t === out || t.length < 2) break;
+      out = t;
+    }
+    return out;
+  }
+
+  // 刀工后缀：「番茄丁」「牛肉片」「红薯条」——模型爱这么写，库里是「番茄」。
+  // 只剥形态词（丁丝块片末粒泥段条碎），不剥「酱汁干粉汤水油」这类会改变
+  // 食物本身的字：番茄酱不能当成番茄，橙汁也不能当成橙子。
+  var RECOG_MORPH = /(丁|丝|块|片|末|粒|泥|段|条|碎)$/;
+
+  function stripMorph(s) {
+    var t = String(s || '').replace(RECOG_MORPH, '');
+    return t.length >= 2 ? t : s;
+  }
+
+  // 两个字以上、至少命中一半才算像。宁可返回 null 走 AI 估算，
+  // 也不要把「清炒芥蓝」硬塞给「清炒时蔬」——那比没有更误导人。
+  function overlapScore(a, b) {
+    if (!a || !b || a.length < 2 || b.length < 2) return 0;
+    var pool = {}, i;
+    for (i = 0; i < b.length; i++) pool[b.charAt(i)] = (pool[b.charAt(i)] || 0) + 1;
+    var hit = 0;
+    for (i = 0; i < a.length; i++) {
+      var ch = a.charAt(i);
+      if (pool[ch]) { pool[ch]--; hit++; }
+    }
+    if (hit < 2) return 0;
+    return (hit / Math.max(a.length, b.length)) * 70;
+  }
+
+  function matchFood(rawName) {
+    var q = normName(rawName);
+    if (!q) return null;
+    var map = allFoods();
+    var qb = bareName(q);
+    var qm = stripMethod(qb);
+
+    // 查询的几种写法：原文 / 去括号 / 剥做法 / 再剥刀工后缀
+    var variants = [];
+    function addVariant(x) {
+      if (x && x.length >= 2 && variants.indexOf(x) < 0) variants.push(x);
+    }
+    addVariant(qb);
+    addVariant(qm);
+    addVariant(stripMorph(qm));
+    addVariant(stripMorph(qb));
+
+    var alias = FOOD_ALIASES[q], k;
+    for (k = 0; k < variants.length && !alias; k++) alias = FOOD_ALIASES[variants[k]];
+    if (alias && map[alias]) return map[alias];
+
+    var list = foodList();
+    var best = null, bestScore = 0;
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      var fn = normName(f.n);
+      // 先按原始名去掉括号里的规格，再规整：normName 会把括号直接删掉，
+      // 先规整的话「猪肉（五花肉）」会变成「猪肉五花肉」，括号就白留了。
+      var fb = normName(bareName(f.n));
+      for (var v = 0; v < variants.length; v++) {
+        var s = 0;
+        var vi = variants[v];
+        if (fb === vi) s = 92;                                   // 规范名一致（忽略括号里的规格）
+        else if (fn === vi) s = 91;                              // 连括号一起对上
+        // 库名以查询开头：可乐 → 可乐（听装 330 ml）
+        else if (fb.indexOf(vi) === 0 && fb.length - vi.length <= 6) s = 84;
+        // 查询以库名结尾，且只多一两个字：清蒸鲈鱼 → 鲈鱼
+        // （fb 比 vi 长时 lastIndexOf 是 -1，vi.length - fb.length 也是负数，
+        //   不挡住的话任何长名字都会白捡 80 分——菠萝炒饭曾因此匹配上猪肉）
+        else if (fb.length >= 2 && fb.length <= vi.length &&
+          vi.length - fb.length <= 2 && vi.lastIndexOf(fb) === vi.length - fb.length) s = 80;
+        else s = overlapScore(vi, fb);
+        if (s > bestScore) { bestScore = s; best = f; }
+      }
+    }
+    return bestScore >= 55 ? best : null;
+  }
+
+  // 把一条识别结果变成一条待确认的记录（形状必须和 beginEntry 里的一致，
+  // 否则份量面板上的单位/折算重量会算错）
+  function aiDraft(it) {
+    var m = matchFood(it.name);
+    var grams = Math.max(1, Math.round(Number(it.grams) || 100));
+    var d;
+    if (m) {
+      var unit = m.u || '克';
+      var per = unit === '克' ? 1 : (gramsPerUnit(m.n, unit) || m.w || 100);
+      d = {
+        id: uid(), date: state.date, meal: picker.meal,
+        foodId: m.n, name: m.n, cat: m.c,
+        unit: unit, qty: Math.max(0.5, Math.round((grams / (per || 100)) * 100) / 100), grams: grams,
+        per100: { e: m.e, p: m.p, f: m.f, ch: m.ch },
+        kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now(), recog: 'db',
+        eat: 1, price: 0, note: ''
+      };
+    } else {
+      d = {
+        id: uid(), date: state.date, meal: picker.meal,
+        foodId: '', name: String(it.name || '识别到的菜'), cat: '家常菜',
+        unit: '克', qty: grams, grams: grams,
+        per100: {
+          e: Number(it.kcal100) || 0, p: Number(it.protein100) || 0,
+          f: Number(it.fat100) || 0, ch: Number(it.carbs100) || 0
+        },
+        kcal: 0, p: 0, f: 0, ch: 0, ts: Date.now(), recog: 'ai',
+        eat: 1, price: 0, note: ''
+      };
+    }
+    recalc(d);
+    return d;
+  }
+
+  function recogRowHtml(it, i) {
+    var m = matchFood(it.name);
+    var grams = Math.max(1, Math.round(Number(it.grams) || 100));
+    var name = m ? m.n : String(it.name || '识别到的菜');
+    var cat = m ? m.c : '家常菜';
+    var per100 = m ? m.e : (Number(it.kcal100) || 0);
+    var tag = m
+      ? '<span class="recog-tag db">库</span>'
+      : '<span class="recog-tag ai">AI 估算</span>';
+    return '<div class="row" data-act="recog-item" data-i="' + i + '">' +
+      '<div class="thumb">' + foodEmoji(name, cat) + '</div>' +
+      '<div class="body"><div class="title">' + esc(name) + ' ' + tag + '</div>' +
+      '<div class="meta">' + esc(cat) + ' · 约 ' + grams + ' g · ' + r0(per100 * grams / 100) + ' kcal</div></div>' +
+      '<div class="tail">' + svg('plus') + '</div></div>';
+  }
+
+  function recogListHtml(res, secs) {
+    var items = res.items || [];
+    if (!items.length) {
+      return '<div class="field"><div class="small muted">这张照片没认出能吃的菜。' +
+        '凑近一点、把盘子拍全一点，或者光线亮些再试。</div>' +
+        '<div class="small muted mt8">这次不算次数，放心重拍。</div>' +
+        '<div class="quick mt12"><button class="btn ghost" data-act="recognize">重拍一张</button>' +
+        '<button class="btn ghost" data-act="recog-manual">手动记一条</button></div></div>';
+    }
+    return '<div class="field"><label>认出 ' + items.length + ' 样' + (secs ? ' · ' + secs + ' 秒' : '') + '</label>' +
+      '<div class="list">' + items.map(recogRowHtml).join('') + '</div>' +
+      (res.note ? '<div class="small muted mt8">' + esc(res.note) + '</div>' : '') +
+      '<div class="small muted mt8">点一条可以改份量。「AI 估算」的是食物库里没有的，' +
+      '误差会大一些，能改就改成自己熟悉的菜。</div></div>' +
+      '<div class="field"><label>加到哪一餐</label><div class="quick">' +
+      window.MEALS.map(function (m) { return '<button data-act="recog-meal" data-m="' + m.id + '" class="' +
+        (picker.meal === m.id ? 'on' : '') + '" style="' + (picker.meal === m.id ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' +
+        m.emoji + m.name + '</button>'; }).join('') +
+      '</div></div>' +
+      '<div class="field"><button class="btn" data-act="recog-all">全部加进' + mealName(picker.meal) + '</button></div>';
+  }
+
+  /* 出错了别只留一句「再试试」。三条路给全：
+   * 重拍（次数还够时最好使）、稍后重试（网络问题，图已经存下来了）、
+   * 手动记一条（次数用完或者连不上，总不能饿着不记）。 */
+  function recogErrHtml(r) {
+    var hint;
+    if (r.status === 503) hint = '服务器上还没配视觉模型的 Key，配好再试（见 README 的「拍照识别」一节）。';
+    else if (r.status === 413) hint = '图片太大了，换一张再试。';
+    else if (r.status === 401) hint = '登录过期了，去「我的」重新登录。';
+    else if (r.status === 429) hint = '今天的次数用完了（每人每天 5 次），明天再来；也可以用下面第二个按钮手动记。';
+    else if (!r.status) hint = '连不上服务器。这张图已经留在手机上了，等有网再点「稍后重试」就行。';
+    else hint = '识别失败，换一张清楚一点的再试。这次没扣次数。';
+    /* 网络类失败（超时/断网/网关 5xx）才值得存图重试；
+       401/429/413 存了也没用，重试只会再错一遍。 */
+    var retryable = !r.status || r.status === 502 || r.status === 504;
+    var btns = '<div class="quick mt12">' +
+      '<button class="btn ghost" data-act="recognize">重新拍一张</button>' +
+      (retryable ? '<button class="btn" data-act="recog-retry">稍后重试</button>' : '') +
+      '<button class="btn ghost" data-act="recog-manual">手动记一条</button></div>';
+    return '<div class="field"><div class="small muted">' + esc(r.error || '出错了') + '</div>' +
+      '<div class="small muted mt8">' + hint + '</div>' + btns + '</div>';
+  }
+
+  function readFileAsDataUrl(file, cb) {
+    try {
+      var reader = new FileReader();
+      reader.onload = function () { cb(String(reader.result || '')); };
+      reader.onerror = function () { cb(''); };
+      reader.readAsDataURL(file);
+    } catch (e) { cb(''); }
+  }
+
+  /* 读 JPEG 的 EXIF 方向标记（1–8）。为什么要自己读：
+   * 安卓 7/8 的 WebView 内核是 Chrome 5x，浏览器自动按 EXIF 转正是 Chrome 81 才有的事。
+   * 竖着拍的一盘菜，在那些机器上交给我们的 img 是躺着的，模型看图会认错。
+   * 只扫 data URL 开头 192 KB —— EXIF 段一定紧跟在文件头后面。 */
+  function exifOrientation(dataUrl) {
+    try {
+      var comma = String(dataUrl).indexOf(',');
+      if (comma < 0) return 1;
+      var bin = window.atob(String(dataUrl).slice(comma + 1, comma + 1 + 192 * 1024));
+      var n = bin.length;
+      if (n < 4 || bin.charCodeAt(0) !== 0xFF || bin.charCodeAt(1) !== 0xD8) return 1;  // 不是 JPEG
+      var p = 2;
+      while (p + 4 < n) {
+        if (bin.charCodeAt(p) !== 0xFF) return 1;
+        var marker = bin.charCodeAt(p + 1);
+        if (marker === 0xDA || marker === 0xD9) return 1;   // 到了图像数据，不该再有 EXIF
+        var len = (bin.charCodeAt(p + 2) << 8) | bin.charCodeAt(p + 3);
+        if (marker === 0xE1 && bin.substr(p + 4, 6) === 'Exif\u0000\u0000') {
+          return readExifOrientation(bin, p + 10, n);
+        }
+        p += 2 + len;
+      }
+    } catch (e) { /* atob 挂了就当没有 EXIF */ }
+    return 1;
+  }
+
+  function readExifOrientation(bin, tiff, n) {
+    if (tiff + 8 > n) return 1;
+    var little = bin.charCodeAt(tiff) === 0x49 && bin.charCodeAt(tiff + 1) === 0x49;
+    function u16(o) {
+      var a = bin.charCodeAt(o), b = bin.charCodeAt(o + 1);
+      return little ? ((b << 8) | a) : ((a << 8) | b);
+    }
+    function u32(o) {
+      if (little) {
+        return (bin.charCodeAt(o + 3) << 24 | bin.charCodeAt(o + 2) << 16 |
+          bin.charCodeAt(o + 1) << 8 | bin.charCodeAt(o)) >>> 0;
+      }
+      return (bin.charCodeAt(o) << 24 | bin.charCodeAt(o + 1) << 16 |
+        bin.charCodeAt(o + 2) << 8 | bin.charCodeAt(o + 3)) >>> 0;
+    }
+    if (u16(tiff + 2) !== 0x002A) return 1;      // TIFF magic 不对
+    var ifd = tiff + u32(tiff + 4);
+    if (ifd + 2 > n) return 1;
+    var count = u16(ifd);
+    for (var i = 0; i < count; i++) {
+      var e = ifd + 2 + i * 12;
+      if (e + 12 > n) return 1;
+      if (u16(e) === 0x0112) {                   // Orientation
+        var v = u16(e + 8);
+        return (v >= 1 && v <= 8) ? v : 1;
+      }
+    }
+    return 1;
+  }
+
+  /* 按 EXIF 方向摆正坐标系再画图。画布尺寸已经按「转完以后的宽高」建好，
+   * 所以这里只负责把坐标系转过去。w/h 是原图（未转）的宽高。 */
+  function applyExifTransform(ctx, ori, w, h) {
+    if (ori === 2) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    else if (ori === 3) { ctx.translate(w, h); ctx.rotate(Math.PI); }
+    else if (ori === 4) { ctx.translate(0, h); ctx.scale(1, -1); }
+    else if (ori === 5) { ctx.rotate(0.5 * Math.PI); ctx.scale(1, -1); }
+    else if (ori === 6) { ctx.rotate(0.5 * Math.PI); ctx.translate(0, -h); }
+    else if (ori === 7) { ctx.rotate(0.5 * Math.PI); ctx.translate(w, -h); ctx.scale(-1, 1); }
+    else if (ori === 8) { ctx.rotate(-0.5 * Math.PI); ctx.translate(-w, 0); }
+  }
+
+  /* 糊了或者太暗的照片，发上去只有两种结果：认错菜，或者白扣一次额度（每天 5 次）。
+   * 送出去之前先在本地量两个数：平均亮度、拉普拉斯方差（越小越糊）。
+   * 阈值故意放得很松 —— 只有明显不能看的时候才拦一下，不让它变成新的麻烦。 */
+  function photoMetrics(canvas, w, h) {
+    try {
+      var s = Math.min(1, 192 / Math.max(w, h));
+      var mw = Math.max(8, Math.round(w * s)), mh = Math.max(8, Math.round(h * s));
+      var tmp = document.createElement('canvas');
+      tmp.width = mw; tmp.height = mh;
+      var tctx = tmp.getContext ? tmp.getContext('2d') : null;
+      if (!tctx) return null;
+      tctx.drawImage(canvas, 0, 0, mw, mh);
+      var d = tctx.getImageData(0, 0, mw, mh).data;
+      var gray = [], sum = 0, j = 0;
+      for (var i = 0; i < d.length; i += 4) {
+        var g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        gray[j++] = g; sum += g;
+      }
+      var bright = sum / (gray.length || 1);
+      var lap = [], mean = 0;
+      for (var y = 1; y < mh - 1; y++) {
+        for (var x = 1; x < mw - 1; x++) {
+          var k = y * mw + x;
+          var v = 4 * gray[k] - gray[k - 1] - gray[k + 1] - gray[k - mw] - gray[k + mw];
+          lap.push(v); mean += v;
+        }
+      }
+      mean = mean / (lap.length || 1);
+      var vs = 0;
+      for (var q = 0; q < lap.length; q++) { var dv = lap[q] - mean; vs += dv * dv; }
+      return { brightness: bright, sharpness: vs / (lap.length || 1) };
+    } catch (e) {
+      return null;   // 取不到像素就当测不了，不拦用户
+    }
+  }
+
+  function qualityHint(m) {
+    if (!m) return '';
+    if (m.brightness < 42) return '这张太暗了，模型多半看不清。开个灯、或者到窗边重拍一张会准很多。';
+    if (m.sharpness < 30) return '这张有点糊（手抖或没对上焦），模型容易认错菜。建议重拍一张。';
+    return '';
+  }
+
+  /* 压图在本地做：原图动辄 3–5 MB，直接 base64 传上去既慢又费流量，
+   * 服务端还要为它多吃内存。视觉模型反正会把图缩到 ~1.3 兆像素，
+   * 提前缩到 896px 基本不损失识别率。 */
+  function shrinkImage(dataUrl, cb) {
+    var img = new Image();
+    img.onload = function () {
+      var w = img.width || 1, h = img.height || 1;
+      var ori = exifOrientation(dataUrl);
+      var swap = ori >= 5 && ori <= 8;            // 5–8 带 90° 旋转
+      var scale = Math.min(1, RECOG_EDGE / Math.max(swap ? h : w, swap ? w : h));
+      // 够小、方向也对、本身不大 —— 原样发，省一次重新编码
+      if (scale >= 1 && ori === 1 && dataUrl.length < 400 * 1024) { cb(dataUrl, null); return; }
+      var cw = Math.max(1, Math.round(w * scale));
+      var ch = Math.max(1, Math.round(h * scale));
+      var dw = swap ? ch : cw, dh = swap ? cw : ch;
+      var cv = document.createElement('canvas');
+      cv.width = dw; cv.height = dh;
+      var ctx = cv.getContext ? cv.getContext('2d') : null;
+      if (!ctx) { cb(dataUrl, null); return; }
+      // 先铺白底：PNG 透明区转 JPEG 会变成黑块
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, dw, dh);
+      ctx.save();
+      applyExifTransform(ctx, ori, cw, ch);
+      ctx.drawImage(img, 0, 0, cw, ch);
+      ctx.restore();
+      var out = dataUrl;
+      try { out = cv.toDataURL('image/jpeg', RECOG_QUALITY) || dataUrl; } catch (e) { /* 保持原图 */ }
+      cb(out, photoMetrics(cv, dw, dh));
+    };
+    // HEIC 之类解不开的就原样发，让服务端去拒，至少能看到明确的报错
+    img.onerror = function () { cb(dataUrl, null); };
+    img.src = dataUrl;
+  }
+
+  /* 每天只给 5 次，所以把剩余次数写在按钮下面 —— 让人先知道还剩多少，
+   * 而不是拍到第 6 张才被服务端 429 顶回来。查不到就整行不显示。 */
+  function recogQuotaText(s) {
+    if (!s || !s.enabled) return '';
+    var left = Number(s.remainingToday);
+    if (!isFinite(left)) return '';
+    var lim = Number(s.dailyLimit) || 0;
+    if (left <= 0) return '今天的次数用完了（每天 ' + (lim || 5) + ' 次），明天再来。也可以手动记一条。';
+    return '今天还能识别 ' + left + ' 次' + (lim ? '（每天 ' + lim + ' 次）' : '');
+  }
+
+  function fillRecogQuota(sheet) {
+    var el = $('#recog-quota', sheet);
+    if (!el) return;
+    api.recognizeStatus(serverCfg()).then(function (r) {
+      if (!r || r.error || !r.data) return;
+      if (!el.parentNode) return;   // 面板已经关了
+      el.textContent = recogQuotaText(r.data);
+    });
+  }
+
+  function openRecognizeSheet() {
+    recogOut = null;
+    recogBusy = false;
+    var body =
+      '<div class="field"><div class="small muted">拍一张饭菜的照片，一次能认出桌上几样。' +
+      '重量是估的，加进记录之前都能改。</div>' +
+      '<div class="small muted mt8">拍得准一点：光线足、整盘都框进去、从上往下斜着拍；' +
+      '别用手或筷子挡住主要的菜。</div>' +
+      '<button class="btn mt12" data-act="recog-pick">📷 拍照 / 从相册选</button>' +
+      '<input type="file" id="recog-file" accept="image/*" class="recog-file">' +
+      '<div class="small muted mt8" id="recog-quota"></div>' +
+      '</div>' +
+      '<div id="recog-out"></div>';
+    /* 上次因为断网/超时没发出去的那张，别让用户再翻一遍相册。 */
+    if (loadPendingPhoto()) {
+      body += '<div class="field"><label>上次那张还没发出去</label>' +
+        '<div class="small muted">照片还留在手机上，不用重拍。</div>' +
+        '<div class="quick mt12"><button class="btn" data-act="recog-retry">重新发送</button>' +
+        '<button class="btn ghost" data-act="recog-drop">丢掉</button></div></div>';
+    }
+    var sheet = openSheet('拍照识别', body,
+      '<button class="btn ghost" data-act="cancel">关闭</button>');
+    var input = $('#recog-file', sheet);
+    if (input) input.addEventListener('change', function () { onPickPhoto(this, sheet); });
+    fillRecogQuota(sheet);
+  }
+
+  function onPickPhoto(input, sheet) {
+    var file = input.files && input.files[0];
+    var out = $('#recog-out', sheet);
+    if (!file || !out) return;
+    if (recogBusy) { toast('上一张还在识别'); return; }
+    // 手机直出 HEIC 也能有 8 MB，压图前先挡一道，别把内存吃爆
+    if (file.size > 25 * 1024 * 1024) { out.innerHTML = '<div class="field"><div class="small muted">这张图太大了（>25 MB）。</div></div>'; return; }
+    recogPending = null;
+    out.innerHTML = '<div class="field"><div class="small muted">正在压缩图片…</div></div>';
+    readFileAsDataUrl(file, function (raw) {
+      if (!raw) {
+        out.innerHTML = '<div class="field"><div class="small muted">这张图读不出来，换一张（JPG / PNG）试试。</div></div>';
+        return;
+      }
+      shrinkImage(raw, function (small, m) {
+        var bad = qualityHint(m);
+        if (bad) {
+          /* 先别发：一天只有 5 次，糊图发出去大概率是浪费一次。
+             图已经压好了，用户点「就这样识别」就接着发。 */
+          recogPending = small;
+          out.innerHTML = '<div class="recog-photo"><img src="' + small + '" alt=""></div>' +
+            '<div class="field"><div class="small muted">' + esc(bad) + '</div>' +
+            '<div class="quick mt12"><button class="btn ghost" data-act="recog-pick">换一张</button>' +
+            '<button class="btn" data-act="recog-force">就这样识别</button></div></div>';
+          return;
+        }
+        sendRecognize(small, out);
+      });
+    });
+  }
+
+  function sendRecognize(small, out) {
+    recogPending = null;
+    out.innerHTML = '<div class="recog-photo"><img src="' + small + '" alt=""></div>' +
+      '<div class="field"><div class="small muted">识别中… 大模型看图一般 3–10 秒</div></div>';
+    var t0 = Date.now();
+    recogBusy = true;
+    api.recognize(serverCfg(), { image: small, meal: picker.meal, clientId: newClientId() }).then(function (r) {
+      recogBusy = false;
+      if (!out.parentNode) return;   // 面板已经被关掉了
+      if (r.error) {
+        /* 网络类失败把图存下来，「稍后重试」就不用重拍。
+           同一个 clientId 重发时服务端会认出来，不会重复扣次数。 */
+        var retryable = !r.status || r.status === 502 || r.status === 504;
+        if (retryable) savePendingPhoto(small);
+        out.innerHTML = recogErrHtml(r);
+        return;
+      }
+      savePendingPhoto('');
+      var data = r.data || {};
+      recogOut = { items: data.items || [], note: data.note || '', model: data.model || '' };
+      out.innerHTML = recogListHtml(recogOut, Math.round((Date.now() - t0) / 1000));
+      var q = $('#recog-quota');
+      if (q && data.remainingToday !== undefined) {
+        q.textContent = recogQuotaText({
+          enabled: true, remainingToday: data.remainingToday, dailyLimit: data.dailyLimit
+        });
+      }
+    });
+  }
+
+  function addAllAi() {
+    if (!recogOut || !recogOut.items.length) { toast('没有可加的'); return; }
+    var meal = picker.meal;
+    var n = 0;
+    for (var i = 0; i < recogOut.items.length; i++) {
+      var d = aiDraft(recogOut.items[i]);
+      state.entries.push(d);
+      var nm = d.name;
+      state.recent = [nm].concat(state.recent.filter(function (x) { return x !== nm; })).slice(0, 20);
+      n++;
+    }
+    if (!n) return;
+    markDiaryDirty(state.date);
+    save();
+    closeSheet();
+    render();
+    toast('已加 ' + n + ' 样到' + mealName(meal));
   }
 
   /* ------------------------------------------------------- custom food */
@@ -1537,7 +2246,7 @@
     var sheet = openSheet('新建自定义食物', body, foot);
     setNewFoodMode('serving', sheet);
 
-    sheet.addEventListener('input', function (ev) {
+    bindSheet('input', function (ev) {
       if (ev.target.id === 'nf-e') return;
       var pe = $('#nf-p', sheet), ce = $('#nf-ch', sheet), fe = $('#nf-f', sheet), ee = $('#nf-e', sheet);
       if (!pe || !ce || !fe || !ee) return;
@@ -1615,6 +2324,18 @@
     if (!res) return '';
     if (res.error) return res.error;
     return '';
+  }
+
+  /** 退出登录：只摘掉本机 token 和账号信息。记录、自定义食物都留在本机不动，
+     之后再登录（同一个账号）会以服务器上的那份为准合并回来。 */
+  function doLogout() {
+    api.logout(serverCfg());   // 先拿旧 token 去注销，清空之后就发不出去了
+    state.server.token = '';
+    state.server.userId = null;
+    state.server.uid = '';
+    state.server.displayName = '';
+    save();
+    render();
   }
 
   /** 打开「社交服务器」设置浮层：填地址 → 连健康检查 → 注册/登录 */
@@ -2622,7 +3343,7 @@
         .map(function (p) { return '<button data-act="preset" data-v="' + p.slice(1).join(',') + '">' + p[0] + '</button>'; }).join('') +
       '</div>';
     var sheet = openSheet('修改每日目标', body, '<button class="btn" data-act="save-goals">保存</button>');
-    sheet.addEventListener('click', function (ev) {
+    bindSheet('click', function (ev) {
       var t = ev.target.closest('[data-act="preset"]');
       if (!t) return;
       var v = t.getAttribute('data-v').split(',');
@@ -2652,7 +3373,7 @@
       '<button data-act="pd-jump" data-d="-2">前天</button>' +
       '</div>';
     var sheet = openSheet('跳到某天', body, '<button class="btn" data-act="save-date">确定</button>');
-    sheet.addEventListener('click', function (ev) {
+    bindSheet('click', function (ev) {
       var t = ev.target.closest('[data-act="pd-jump"]');
       if (!t) return;
       $('#pd', sheet).value = shiftDay(today(), parseInt(t.getAttribute('data-d'), 10));
@@ -2694,6 +3415,69 @@
         break;
       case 'new-food':
         openNewFood();
+        break;
+      case 'recognize':
+        openRecognizeSheet();
+        break;
+      case 'recog-pick': {
+        // 必须是用户点的那一下里触发，否则部分 WebView 会拦掉「非用户手势」的文件选择
+        var rf = $('#recog-file');
+        if (rf) rf.click();
+        break;
+      }
+      case 'recog-meal': {
+        var rm = el.getAttribute('data-m');
+        if (!rm) break;
+        picker.meal = rm;
+        $$('[data-act="recog-meal"]').forEach(function (b) {
+          var on = b.getAttribute('data-m') === rm;
+          b.style.background = on ? 'var(--brand)' : '';
+          b.style.color = on ? 'var(--brand-ink)' : '';
+          b.style.borderColor = on ? 'var(--brand)' : '';
+        });
+        // 只改「全部加进…」那几个字，不重画整块 —— 重画会让刚选的照片闪一下
+        var allBtn = $('[data-act="recog-all"]');
+        if (allBtn) allBtn.textContent = '全部加进' + mealName(rm);
+        break;
+      }
+      case 'recog-force': {
+        // 用户看过「有点糊/太暗」的提醒，仍然要发 —— 图早就压好了，直接发
+        if (!recogPending) { toast('没有待识别的照片，重新选一张'); break; }
+        var ro = $('#recog-out');
+        if (ro) sendRecognize(recogPending, ro);
+        break;
+      }
+      case 'recog-item': {
+        var ri = Number(el.getAttribute('data-i'));
+        var item = recogOut && recogOut.items[ri];
+        if (!item) break;
+        picker.draft = aiDraft(item);
+        openPortionSheet(false);
+        break;
+      }
+      case 'recog-all':
+        addAllAi();
+        break;
+      /* 断网/超时后重发那张存下来的图。同一个 clientId 服务端认得出，
+         就算上次其实已经到了服务器，这次也只是把结果拿回来，不多扣次数。 */
+      case 'recog-retry': {
+        var again = recogPending || loadPendingPhoto();
+        var rOut = $('#recog-out');
+        if (!again) { toast('那张图已经不在了，重新拍一张吧'); break; }
+        if (!rOut) break;
+        sendRecognize(again, rOut);
+        break;
+      }
+      case 'recog-drop':
+        savePendingPhoto('');
+        recogPending = null;
+        closeSheet();
+        toast('已经丢掉那张照片');
+        break;
+      /* 识别这条路走不通时，别把用户堵在死胡同里：直接转手动记一条，餐次带过去。 */
+      case 'recog-manual':
+        closeSheet();
+        openAddFood(picker.meal);
         break;
       case 'pick':
         beginEntry(el.getAttribute('data-name'));
@@ -2846,11 +3630,12 @@
       case 'server-login': doServerLogin(false); break;
       case 'server-register': doServerLogin(true); break;
       case 'server-logout':
-        api.logout(serverCfg());
-        state.server.token = '';
-        state.server.userId = null;
-        state.server.displayName = '';
-        save(); closeSheet(); render(); toast('已退出登录');
+      case 'logout-account':
+        doLogout(); closeSheet(); toast('已退出登录');
+        break;
+      case 'switch-account':
+        doLogout(); closeSheet(); openServerSheet();
+        toast('已退出，登录另一个账号');
         break;
       case 'server-sync':
         closeSheet();
@@ -3372,6 +4157,20 @@
       state: state,
       flush: flushSave,
       saveNow: saveNow,
+      matchFood: matchFood,
+      aiDraft: aiDraft,
+      /* 出错了怎么提示、以及「断网时把图存下来」这条退路，也要能被测到 */
+      recogErrHtml: recogErrHtml,
+      sendRecognize: sendRecognize,
+      loadPendingPhoto: loadPendingPhoto,
+      /* B 需求（备注/价格/吃了多少）与 A 组（EXIF/清晰度）的纯函数，给 jsdom 测试用 */
+      eatenOf: eatenOf,
+      eatLabel: eatLabel,
+      spentOf: spentOf,
+      money: money,
+      monthSpendText: monthSpendText,
+      exifOrientation: exifOrientation,
+      qualityHint: qualityHint,
       view: function (v) { state.view = v; syncHash(); render(); },
       sheet: function (which, arg) {
         if (which === 'portion') beginEntry(arg || '鸡胸肉');
