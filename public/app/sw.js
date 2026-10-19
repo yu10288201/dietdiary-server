@@ -7,7 +7,7 @@
  * 接口（/api/*）和别的域名一律不碰：数据和登录态必须是实时的，
  * 缓存一份旧的版本清单反而会让人收到过时的更新提示。
  */
-const CACHE = 'shike-shell-v1';
+const CACHE = 'shike-shell-1000015';
 const SHELL = [
   './',
   'index.html',
