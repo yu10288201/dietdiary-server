@@ -182,6 +182,74 @@ router.delete('/photos/:id', requireAuth, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ------------------------------------------------- 朋友圈：我和好友的照片流 */
+/* 按时间倒序、游标分页（before = 上一页最后一张的 createdAt）。
+   不加 offset 分页：翻页时有人新传了照片，offset 会漏拍或重拍。 */
+router.get('/photos/feed', requireAuth, h(async (req, res) => {
+  const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 24));
+  const before = Number(req.query.before) || 0;
+
+  const friendRows = await all(
+    `SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END AS fid
+       FROM friendships
+      WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?)`,
+    [req.user.id, req.user.id, req.user.id]
+  );
+  const ids = [req.user.id];
+  for (const r of friendRows) {
+    const fid = Number(r.fid);
+    if (fid && ids.indexOf(fid) < 0) ids.push(fid);
+  }
+
+  const marks = ids.map(() => '?').join(', ');
+  const args = ids.slice();
+  let where = `WHERE user_id IN (${marks})`;
+  if (before > 0) { where += ' AND created_at < ?'; args.push(before); }
+
+  const rows = await all(
+    `SELECT * FROM photos ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
+    args
+  );
+
+  // 作者信息一次性查出来，别在循环里查 N 次
+  const authorIds = [];
+  for (const row of rows) {
+    const uid = Number(row.user_id);
+    if (authorIds.indexOf(uid) < 0) authorIds.push(uid);
+  }
+  const userMap = new Map();
+  if (authorIds.length) {
+    const userRows = await all(
+      `SELECT id, username, display_name, avatar_color, uid FROM users
+        WHERE id IN (${authorIds.map(() => '?').join(', ')})`,
+      authorIds
+    );
+    for (const u of userRows) userMap.set(Number(u.id), u);
+  }
+
+  const photos = rows.map((row) => {
+    const author = userMap.get(Number(row.user_id)) || {};
+    return {
+      ...shapePhoto(row),
+      mine: Number(row.user_id) === req.user.id,
+      author: {
+        id: Number(row.user_id),
+        username: author.username || '',
+        displayName: author.display_name || '',
+        avatarColor: author.avatar_color || '#9E9E9E',
+        uid: author.uid || ''
+      }
+    };
+  });
+
+  const last = rows.length === limit ? photos[photos.length - 1] : null;
+  res.json({
+    photos,
+    hasMore: rows.length === limit,
+    nextBefore: last ? last.createdAt : 0
+  });
+}));
+
 /* 给 index.js 的 feed 用：按 (user_id, date) 批量取照片，一条 SQL 解决 */
 export async function photosByOwners(pairs) {
   if (!pairs || !pairs.length) return new Map();

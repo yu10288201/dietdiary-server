@@ -362,6 +362,7 @@ JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默�
 | GET | `/api/storage/status` | 是 | `{ok,enabled,ready,bucket,endpoint,private,hasKey,dailyLimit,usedToday}`；`enabled:false` 表示没配 OSS，App 应该把上传入口藏掉 |
 | POST | `/api/photos` | 是 | `{image, date?, meal?, caption?, width?, height?, clientId?}` → `201 {ok, photo}`；图片是 data URL 或纯 base64 |
 | GET | `/api/photos?date=YYYY-MM-DD` | 是 | `{date, photos:[...]}` 只返回自己的 |
+| GET | `/api/photos/feed?before=&limit=` | 是 | 我 + 好友的照片流 `{photos, hasMore, nextBefore}`，按时间倒序 |
 | DELETE | `/api/photos/:id` | 是 | 只能删自己的；会顺手删 OSS 上的对象 |
 
 `photo` 的形状：`{id, date, meal, url, width, height, bytes, caption, createdAt}`。
@@ -373,6 +374,10 @@ JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默�
 - 限额：每人每天 30 张（`PHOTO_DAILY_LIMIT`），单张 ≤ 3 MB（`PHOTO_MAX_BYTES`），
   备注 ≤ 120 字。按文件头魔数判断 JPEG/PNG/WebP，不看 MIME 也不看扩展名。
 - 没配 OSS 时 `POST /api/photos` 回 **503** 并给出人话提示，识别与记录不受影响。
+- `GET /api/photos/feed` 是「朋友圈」用的：返回本人 + 已接受好友的照片，每条带
+  `mine` 和 `author{id,displayName,avatarColor,uid}`。分页用游标
+  （`before` = 上一页最后一条的 `createdAt`），不用 offset —— 翻页时有人新传照片，
+  offset 会漏一张或重一张。
 
 ### 给好友的饭打分
 
