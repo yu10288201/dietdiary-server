@@ -1,4 +1,4 @@
-// server/src/photos.js
+﻿// server/src/photos.js
 // 饭菜照片：上传到阿里云 OSS，数据库只存「谁、哪天、哪一餐、对象 key、多大」。
 //
 // 为什么图片不存数据库：Turso 免费额度 5 GB，按一个用户一天 3 张、一张 150 KB 算，
@@ -189,18 +189,7 @@ router.get('/photos/feed', requireAuth, h(async (req, res) => {
   const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 24));
   const before = Number(req.query.before) || 0;
 
-  const friendRows = await all(
-    `SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END AS fid
-       FROM friendships
-      WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?)`,
-    [req.user.id, req.user.id, req.user.id]
-  );
-  const ids = [req.user.id];
-  for (const r of friendRows) {
-    const fid = Number(r.fid);
-    if (fid && ids.indexOf(fid) < 0) ids.push(fid);
-  }
-
+  const ids = await visibleAuthorIds(req.user.id);
   const marks = ids.map(() => '?').join(', ');
   const args = ids.slice();
   let where = `WHERE user_id IN (${marks})`;
@@ -211,10 +200,194 @@ router.get('/photos/feed', requireAuth, h(async (req, res) => {
     args
   );
 
-  // 作者信息一次性查出来，别在循环里查 N 次
+  const photos = await decoratePhotos(rows, req.user.id);
+  const last = rows.length === limit ? photos[photos.length - 1] : null;
+  res.json({
+    photos,
+    hasMore: rows.length === limit,
+    nextBefore: last ? last.createdAt : 0
+  });
+}));
+
+/* --------------------------------------------------------- 单张照片的详情 */
+router.get('/photos/:id', requireAuth, h(async (req, res) => {
+  const row = await loadVisiblePhoto(req.params.id, req.user.id);
+  const [photo] = await decoratePhotos([row], req.user.id);
+  const comments = await listComments(Number(row.id), req.user.id);
+  res.json({ photo, comments });
+}));
+
+/* ------------------------------------------------------------- 点赞（切换） */
+router.post('/photos/:id/like', requireAuth, h(async (req, res) => {
+  const row = await loadVisiblePhoto(req.params.id, req.user.id);
+  const pid = Number(row.id);
+  const mine = await get('SELECT 1 AS x FROM photo_likes WHERE photo_id = ? AND user_id = ?',
+    [pid, req.user.id]);
+  let liked;
+  if (mine) {
+    await run('DELETE FROM photo_likes WHERE photo_id = ? AND user_id = ?', [pid, req.user.id]);
+    liked = false;
+  } else {
+    await run('INSERT INTO photo_likes (photo_id, user_id, created_at) VALUES (?, ?, ?)',
+      [pid, req.user.id, Date.now()]);
+    liked = true;
+  }
+  const c = await get('SELECT COUNT(*) AS n FROM photo_likes WHERE photo_id = ?', [pid]);
+  res.json({ ok: true, liked, likes: Number(c && c.n) || 0 });
+}));
+
+/* ------------------------------------------------------------- 打分（1–5 星） */
+router.post('/photos/:id/rate', requireAuth, h(async (req, res) => {
+  const row = await loadVisiblePhoto(req.params.id, req.user.id);
+  const pid = Number(row.id);
+  const stars = Math.round(Number((req.body || {}).stars));
+  if (!Number.isFinite(stars) || stars < 0 || stars > 5) {
+    throw new HttpError(400, 'stars 需要是 0–5 的整数（0 表示取消打分）');
+  }
+  if (stars === 0) {
+    await run('DELETE FROM photo_ratings WHERE photo_id = ? AND rater_id = ?', [pid, req.user.id]);
+  } else {
+    await run(
+      `INSERT INTO photo_ratings (photo_id, rater_id, stars, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(photo_id, rater_id) DO UPDATE SET stars = excluded.stars, updated_at = excluded.updated_at`,
+      [pid, req.user.id, stars, Date.now()]
+    );
+  }
+  res.json({ ok: true, rating: await ratingOf(pid, req.user.id) });
+}));
+
+/* --------------------------------------------------------------- 评论 */
+router.post('/photos/:id/comments', requireAuth, h(async (req, res) => {
+  const row = await loadVisiblePhoto(req.params.id, req.user.id);
+  const pid = Number(row.id);
+  const body = cleanString((req.body || {}).text, 200);
+  if (!body) throw new HttpError(400, '评论不能为空');
+  const now = Date.now();
+  const r = await run(
+    'INSERT INTO photo_comments (photo_id, user_id, body, created_at) VALUES (?, ?, ?, ?)',
+    [pid, req.user.id, body, now]
+  );
+  const u = await get('SELECT id, username, display_name, avatar_color, uid FROM users WHERE id = ?',
+    [req.user.id]);
+  res.status(201).json({
+    ok: true,
+    comment: {
+      id: Number(r.lastInsertRowid),
+      body,
+      createdAt: now,
+      mine: true,
+      author: shapeAuthor(u)
+    }
+  });
+}));
+
+router.get('/photos/:id/comments', requireAuth, h(async (req, res) => {
+  const row = await loadVisiblePhoto(req.params.id, req.user.id);
+  res.json({ comments: await listComments(Number(row.id), req.user.id), ok: true });
+}));
+
+router.delete('/photo-comments/:id', requireAuth, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'id 无效');
+  const c = await get('SELECT * FROM photo_comments WHERE id = ?', [id]);
+  if (!c) throw new HttpError(404, '评论不存在');
+  const photo = await get('SELECT * FROM photos WHERE id = ?', [Number(c.photo_id)]);
+  const canDelete = Number(c.user_id) === req.user.id || (photo && Number(photo.user_id) === req.user.id);
+  if (!canDelete) throw new HttpError(403, '只能删自己的评论或自己照片下的评论');
+  await run('DELETE FROM photo_comments WHERE id = ?', [id]);
+  res.json({ ok: true });
+}));
+
+/* --------------------------------------------------------- 改文案（只有作者） */
+router.patch('/photos/:id', requireAuth, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'id 无效');
+  const row = await get('SELECT * FROM photos WHERE id = ?', [id]);
+  if (!row) throw new HttpError(404, '照片不存在');
+  if (Number(row.user_id) !== req.user.id) throw new HttpError(403, '只能改自己照片的文案');
+  const caption = cleanString((req.body || {}).caption, MAX_CAPTION);
+  await run('UPDATE photos SET caption = ? WHERE id = ?', [caption, id]);
+  const [photo] = await decoratePhotos([{ ...row, caption }], req.user.id);
+  res.json({ ok: true, photo });
+}));
+
+/* ----------------------------------------------------------- 小工具 */
+function shapeAuthor(u) {
+  return {
+    id: Number(u && u.id) || 0,
+    username: (u && u.username) || '',
+    displayName: (u && u.display_name) || '',
+    avatarColor: (u && u.avatar_color) || '#9E9E9E',
+    uid: (u && u.uid) || ''
+  };
+}
+
+/** 我 + 已接受的好友，这批人的照片对我可见 */
+async function visibleAuthorIds(userId) {
+  const friendRows = await all(
+    `SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END AS fid
+       FROM friendships
+      WHERE status = 'accepted' AND (requester_id = ? OR addressee_id = ?)`,
+    [userId, userId, userId]
+  );
+  const ids = [userId];
+  for (const r of friendRows) {
+    const fid = Number(r.fid);
+    if (fid && ids.indexOf(fid) < 0) ids.push(fid);
+  }
+  return ids;
+}
+
+/** 取一张照片并鉴权：自己的，或者好友的；否则 403/404 */
+async function loadVisiblePhoto(rawId, viewerId) {
+  const id = Number(rawId);
+  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'id 无效');
+  const row = await get('SELECT * FROM photos WHERE id = ?', [id]);
+  if (!row) throw new HttpError(404, '照片不存在');
+  if (Number(row.user_id) !== viewerId) {
+    const ids = await visibleAuthorIds(viewerId);
+    if (ids.indexOf(Number(row.user_id)) < 0) throw new HttpError(403, '看不到这张照片');
+  }
+  return row;
+}
+
+async function ratingOf(photoId, viewerId) {
+  const agg = await get(
+    'SELECT COUNT(*) AS count, AVG(stars) AS avg FROM photo_ratings WHERE photo_id = ?', [photoId]);
+  const mine = await get(
+    'SELECT stars FROM photo_ratings WHERE photo_id = ? AND rater_id = ?', [photoId, viewerId]);
+  const count = Number(agg && agg.count) || 0;
+  const avg = count ? Math.round(Number(agg.avg) * 10) / 10 : 0;
+  return { avg, count, mine: mine ? Number(mine.stars) : 0 };
+}
+
+async function listComments(photoId, viewerId) {
+  const rows = await all(
+    `SELECT c.*, u.username, u.display_name, u.avatar_color, u.uid
+       FROM photo_comments c LEFT JOIN users u ON u.id = c.user_id
+      WHERE c.photo_id = ? ORDER BY c.id ASC`,
+    [photoId]
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    body: r.body,
+    createdAt: Number(r.created_at),
+    mine: Number(r.user_id) === viewerId,
+    userId: Number(r.user_id),
+    author: shapeAuthor({ id: r.user_id, username: r.username, display_name: r.display_name,
+      avatar_color: r.avatar_color, uid: r.uid })
+  }));
+}
+
+/** 一批照片补齐：作者、点赞数、我点没点、评论数、打分 */
+async function decoratePhotos(rows, viewerId) {
+  if (!rows.length) return [];
+  const ids = rows.map((r) => Number(r.id));
+  const marks = ids.map(() => '?').join(', ');
+
   const authorIds = [];
-  for (const row of rows) {
-    const uid = Number(row.user_id);
+  for (const r of rows) {
+    const uid = Number(r.user_id);
     if (authorIds.indexOf(uid) < 0) authorIds.push(uid);
   }
   const userMap = new Map();
@@ -227,28 +400,52 @@ router.get('/photos/feed', requireAuth, h(async (req, res) => {
     for (const u of userRows) userMap.set(Number(u.id), u);
   }
 
-  const photos = rows.map((row) => {
-    const author = userMap.get(Number(row.user_id)) || {};
+  const likeRows = await all(
+    `SELECT photo_id, COUNT(*) AS n FROM photo_likes WHERE photo_id IN (${marks}) GROUP BY photo_id`,
+    ids
+  );
+  const likeMap = new Map(likeRows.map((r) => [Number(r.photo_id), Number(r.n) || 0]));
+
+  const mineRows = await all(
+    `SELECT photo_id FROM photo_likes WHERE user_id = ? AND photo_id IN (${marks})`,
+    [viewerId].concat(ids)
+  );
+  const mineSet = new Set(mineRows.map((r) => Number(r.photo_id)));
+
+  const cmtRows = await all(
+    `SELECT photo_id, COUNT(*) AS n FROM photo_comments WHERE photo_id IN (${marks}) GROUP BY photo_id`,
+    ids
+  );
+  const cmtMap = new Map(cmtRows.map((r) => [Number(r.photo_id), Number(r.n) || 0]));
+
+  const rateRows = await all(
+    `SELECT photo_id, COUNT(*) AS c, AVG(stars) AS a FROM photo_ratings
+      WHERE photo_id IN (${marks}) GROUP BY photo_id`,
+    ids
+  );
+  const rateMap = new Map(rateRows.map((r) => [Number(r.photo_id),
+    { avg: Number(r.c) ? Math.round(Number(r.a) * 10) / 10 : 0, count: Number(r.c) || 0 }]));
+
+  const myRateRows = await all(
+    `SELECT photo_id, stars FROM photo_ratings WHERE rater_id = ? AND photo_id IN (${marks})`,
+    [viewerId].concat(ids)
+  );
+  const myRateMap = new Map(myRateRows.map((r) => [Number(r.photo_id), Number(r.stars)]));
+
+  return rows.map((row) => {
+    const pid = Number(row.id);
+    const r = rateMap.get(pid) || { avg: 0, count: 0 };
     return {
       ...shapePhoto(row),
-      mine: Number(row.user_id) === req.user.id,
-      author: {
-        id: Number(row.user_id),
-        username: author.username || '',
-        displayName: author.display_name || '',
-        avatarColor: author.avatar_color || '#9E9E9E',
-        uid: author.uid || ''
-      }
+      mine: Number(row.user_id) === viewerId,
+      author: shapeAuthor(userMap.get(Number(row.user_id))),
+      likes: likeMap.get(pid) || 0,
+      likedByMe: mineSet.has(pid),
+      commentCount: cmtMap.get(pid) || 0,
+      rating: { avg: r.avg, count: r.count, mine: myRateMap.get(pid) || 0 }
     };
   });
-
-  const last = rows.length === limit ? photos[photos.length - 1] : null;
-  res.json({
-    photos,
-    hasMore: rows.length === limit,
-    nextBefore: last ? last.createdAt : 0
-  });
-}));
+}
 
 /* 给 index.js 的 feed 用：按 (user_id, date) 批量取照片，一条 SQL 解决 */
 export async function photosByOwners(pairs) {

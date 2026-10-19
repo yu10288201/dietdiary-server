@@ -139,6 +139,32 @@ const SCHEMA_STATEMENTS = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_photos_user_date ON photos(user_id, date)`,
+  // 照片的点赞 / 评论 / 打分（v0.7.6，照片从「只能看」变成「能互动」）。
+  // 用 photo_id 而不是 (作者, 日期)：照片是个独立的实体，删了就是删了，
+  // 没有「重新发布」这回事，所以级联删除正是想要的行为。
+  `CREATE TABLE IF NOT EXISTS photo_likes (
+    photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (photo_id, user_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_photo_likes_photo ON photo_likes(photo_id)`,
+  `CREATE TABLE IF NOT EXISTS photo_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_photo_comments_photo ON photo_comments(photo_id, id)`,
+  // 打分沿用 post_ratings 的形状，但绑在照片上（虎扑那种给这张图打 1–5 星）
+  `CREATE TABLE IF NOT EXISTS photo_ratings (
+    photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    rater_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stars      INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (photo_id, rater_id)
+  )`,
   // 给好友的这顿饭打分（1–5 星）。主键 (作者, 日期, 打分人) 而不是 post_id：
   // 理由同 photos —— 重新发布动态不该把别人打过的分丢掉。
   `CREATE TABLE IF NOT EXISTS post_ratings (

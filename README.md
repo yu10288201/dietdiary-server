@@ -390,6 +390,26 @@ JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默�
 
 配置见根 README 的「v0.7.3」小节（`OSS_ACCESS_KEY_ID` 等 6 个环境变量）。
 
+### 照片的互动（v0.7.6）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/api/photos/:id` | 是 | `{photo, comments}`；`photo` 带 `likes / likedByMe / commentCount / rating{avg,count,mine}` |
+| POST | `/api/photos/:id/like` | 是 | 切换点赞 → `{liked, likes}` |
+| POST | `/api/photos/:id/rate` | 是 | `{stars: 0..5}`，0 = 取消 → `{rating:{avg,count,mine}}` |
+| GET | `/api/photos/:id/comments` | 是 | `{comments:[...]}` 按时间正序 |
+| POST | `/api/photos/:id/comments` | 是 | `{text}`（1–200 字）→ `201 {comment}` |
+| DELETE | `/api/photo-comments/:id` | 是 | 评论作者或照片主人可删 |
+| PATCH | `/api/photos/:id` | 是 | `{caption}`（≤120 字），只有照片主人能改 |
+
+- 可见性与照片流一致：**只有自己和已接受的好友**能看到 / 点赞 / 打分 / 评论，
+  陌生人一律 403（不是 404，免得让人以为是删了）。
+- 点赞一张照片一个用户一行（`photo_likes` 主键 `(photo_id, user_id)`）；
+  打分是覆盖不是累加（`photo_ratings` 主键 `(photo_id, rater_id)`）；
+  评论和照片一起级联删除（`photo_comments` 外键 `ON DELETE CASCADE`）。
+- `GET /api/photos/feed` 返回的每一张都带上面那四个互动字段，客户端据此直接铺
+  「❤️ 3 💬 2 ★ 4.5」的角标，不用为每张图再发一次请求。
+
 ### feed 返回结构
 
 ```json

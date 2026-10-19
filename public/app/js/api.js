@@ -121,11 +121,51 @@
       return { data: {
         photos: [
           { id: 1, date: dstr, meal: 'lunch', url: '', caption: '番茄炒蛋 + 米饭', createdAt: Date.now(), mine: true,
+            likes: 3, likedByMe: false, commentCount: 2, rating: { avg: 4.5, count: 2, mine: 5 },
             author: { id: 1, displayName: '我', avatarColor: '#5BA67C', uid: 'DEMO01' } },
           { id: 2, date: dstr, meal: 'dinner', url: '', caption: '楼下小碗菜', createdAt: Date.now() - 3600000, mine: false,
+            likes: 1, likedByMe: true, commentCount: 0, rating: { avg: 4, count: 1, mine: 0 },
             author: { id: 2, displayName: '演示好友', avatarColor: '#E08A3C', uid: 'DEMO02' } }
         ],
         hasMore: false, nextBefore: 0 } };
+    }
+    /* 互动：点赞 / 打分 / 评论 / 改文案。顺序要放在 /api/photos 那条通配之前，
+       否则 /api/photos/1/like 会被当成「上传照片」吃掉。 */
+    if (/\/api\/photos\/\d+\/like$/.test(path)) {
+      return { data: { ok: true, liked: true, likes: 4 } };
+    }
+    if (/\/api\/photos\/\d+\/rate$/.test(path)) {
+      var st = Number(opts.body && opts.body.stars) || 0;
+      return { data: { ok: true, rating: { avg: st || 0, count: st ? 1 : 0, mine: st } } };
+    }
+    if (/\/api\/photos\/\d+\/comments$/.test(path)) {
+      if ((opts.method || 'GET') === 'GET') {
+        return { data: { comments: [
+          { id: 71, body: '看起来好香', createdAt: Date.now() - 60000, mine: false,
+            author: { id: 2, displayName: '演示好友', avatarColor: '#E08A3C', uid: 'DEMO02' } }
+        ] } };
+      }
+      return { data: { comment: { id: Date.now(), body: String((opts.body && opts.body.text) || ''),
+        createdAt: Date.now(), mine: true,
+        author: { id: 1, displayName: '我', avatarColor: '#5BA67C', uid: 'DEMO01' } } } };
+    }
+    if (/\/api\/photo-comments\/\d+$/.test(path)) return { data: { ok: true } };
+    if (/\/api\/photos\/\d+$/.test(path)) {
+      if ((opts.method || 'GET') === 'PATCH') {
+        return { data: { ok: true, photo: { id: 1, date: dstr, url: '', caption: String((opts.body && opts.body.caption) || ''),
+          createdAt: Date.now(), mine: true, likes: 3, likedByMe: false, commentCount: 2,
+          rating: { avg: 4.5, count: 2, mine: 5 },
+          author: { id: 1, displayName: '我', avatarColor: '#5BA67C', uid: 'DEMO01' } } } };
+      }
+      return { data: {
+        photo: { id: Number(String(path).split('/').pop()) || 1, date: dstr, meal: 'lunch', url: '', caption: '番茄炒蛋 + 米饭',
+          createdAt: Date.now(), mine: false, likes: 3, likedByMe: false, commentCount: 1,
+          rating: { avg: 4.5, count: 2, mine: 0 },
+          author: { id: 2, displayName: '演示好友', avatarColor: '#E08A3C', uid: 'DEMO02' } },
+        comments: [
+          { id: 71, body: '看起来好香', createdAt: Date.now() - 60000, mine: false,
+            author: { id: 2, displayName: '演示好友', avatarColor: '#E08A3C', uid: 'DEMO02' } }
+        ] } };
     }
     if (path.indexOf('/api/photos') === 0) {
       var cap = (opts.body && opts.body.caption) || '';
@@ -375,6 +415,43 @@
 
     deletePhoto: function (cfg, id) {
       return request(cfg, '/api/photos/' + encodeURIComponent(id), { method: 'DELETE' });
+    },
+
+    /** 单张照片的详情：{photo, comments}。photo 里带 likes / likedByMe / rating */
+    photoDetail: function (cfg, id) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id), { timeout: 30000 });
+    },
+
+    /** 点赞 / 取消点赞（切换），回 {liked, likes} */
+    likePhoto: function (cfg, id) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id) + '/like', { method: 'POST' });
+    },
+
+    /** 给这张照片打 1–5 星，0 = 取消 */
+    ratePhoto: function (cfg, id, stars) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id) + '/rate', {
+        method: 'POST',
+        body: { stars: stars }
+      });
+    },
+
+    addPhotoComment: function (cfg, id, text) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id) + '/comments', {
+        method: 'POST',
+        body: { text: text }
+      });
+    },
+
+    deletePhotoComment: function (cfg, id) {
+      return request(cfg, '/api/photo-comments/' + encodeURIComponent(id), { method: 'DELETE' });
+    },
+
+    /** 改照片文案（只有作者能改） */
+    editPhotoCaption: function (cfg, id, caption) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: { caption: caption }
+      });
     },
 
     cheers: function (cfg) { return request(cfg, '/api/cheers'); },

@@ -753,3 +753,44 @@ body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 body.dark .wall-tile, body.dark .wall-recent-item { background: var(--surface-2); }
+
+/* ---------------------------------------------------- 照片详情 / 互动（0.7.6） */
+/* 缩略格上的互动角标：只放数字，不抢图 */
+.wall-badges {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; gap: 5px; padding: 4px 6px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .45));
+  font-size: 10.5px; color: #fff; line-height: 1;
+}
+.wall-badge { white-space: nowrap; }
+
+.photo-meta { font-size: 12.5px; color: var(--text-2); margin-top: 10px; }
+.photo-cap { font-size: 14.5px; color: var(--text); margin-top: 6px; line-height: 1.45; }
+.photo-cap.empty { font-size: 12.5px; color: var(--text-3); }
+
+.photo-acts {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.btn.ghost.on { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+
+/* 1–5 星：手指点得中就行，不用做半星 */
+.pstars { display: inline-flex; gap: 2px; }
+.pstar {
+  border: none; background: none; padding: 2px 1px; cursor: pointer;
+  font-size: 21px; line-height: 1; color: var(--line); font-family: inherit;
+}
+.pstar.on { color: #F2A93B; }
+.pstar:active { transform: scale(.9); }
+
+.photo-comments { margin-top: 14px; }
+.pc-item { padding: 9px 0; border-top: 1px solid var(--line); }
+.pc-head { font-size: 12.5px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.pc-del {
+  margin-left: auto; border: none; background: none; cursor: pointer;
+  font-size: 11.5px; color: var(--text-3); font-family: inherit; padding: 2px 4px;
+}
+.pc-body { font-size: 14px; color: var(--text); margin-top: 3px; line-height: 1.45; word-break: break-word; }
+
+/* 评论输入框跟着按钮排一行，别把「发送」挤到下一行 */
+#sheet .sheet-foot #pc-input { flex: 1; min-width: 0; }

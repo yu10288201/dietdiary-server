@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.7.5';
-  var APP_VERSION_CODE = 1000014;
+  var APP_VERSION = '0.7.6';
+  var APP_VERSION_CODE = 1000015;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -2200,6 +2200,8 @@
     if (recogBusy) { toast('上一张还在识别'); return; }
     // 手机直出 HEIC 也能有 8 MB，压图前先挡一道，别把内存吃爆
     if (file.size > 25 * 1024 * 1024) { out.innerHTML = '<div class="field"><div class="small muted">这张图太大了（>25 MB）。</div></div>'; return; }
+    // 0 字节：相机建了文件却没写内容（某些 ROM 会这样），说清楚原因
+    if (!file.size) { out.innerHTML = '<div class="field"><div class="small muted">这个文件是空的：相机没把照片存下来。换一张，或者从相册里选。</div></div>'; return; }
     recogPending = null;
     out.innerHTML = '<div class="field"><div class="small muted">正在压缩图片…</div></div>';
     readFileAsDataUrl(file, function (raw) {
@@ -2432,9 +2434,14 @@
         '<div class="wall-grid">';
       for (var m = 0; m < list.length; m++) {
         var ph = list[m];
+        var badges = '';
+        if (Number(ph.likes)) badges += '<span class="wall-badge">❤️ ' + ph.likes + '</span>';
+        if (Number(ph.commentCount)) badges += '<span class="wall-badge">💬 ' + ph.commentCount + '</span>';
+        else if (ph.rating && Number(ph.rating.count)) badges += '<span class="wall-badge">★ ' + ph.rating.avg + '</span>';
         html += '<button class="wall-tile" data-act="wall-open" data-id="' + ph.id + '">' +
           (ph.url ? '<img src="' + esc(ph.url) + '" alt="" loading="lazy">' : '<span class="small muted">图片没存上</span>') +
           (ph.mine ? '' : '<span class="wall-who">' + esc((ph.author && ph.author.displayName) || '好友') + '</span>') +
+          (badges ? '<span class="wall-badges">' + badges + '</span>' : '') +
           '</button>';
       }
       html += '</div></div>';
@@ -2496,8 +2503,8 @@
         : '<div class="small muted">还没选。点下面的按钮拍照或从相册挑一张。</div>') + '</div>' +
       '<div class="mt8"><button class="btn ghost small" data-act="wall-choose">' +
       (wallImage ? '换一张' : '拍照 / 从相册选') + '</button></div></div>' +
-      '<div class="field"><label>说点什么（可选）</label>' +
-      '<input class="input" id="wall-caption" maxlength="120" placeholder="今天的午饭，楼下小碗菜"></div>' +
+      '<div class="field"><label>文案（可选，好友看得到）</label>' +
+      '<input class="input" id="wall-caption" maxlength="120" placeholder="楼下小碗菜，18 块，米饭没吃完"></div>' +
       '<div class="field"><label>算在哪一天</label>' +
       '<div class="quick">' +
       '<button data-act="wall-day" data-d="today" class="' + (wallDay === 'today' ? 'on' : '') + '">今天</button>' +
@@ -2516,6 +2523,12 @@
     var file = input.files && input.files[0];
     if (!file) return;
     if (file.size > 25 * 1024 * 1024) { toast('这张图太大了，换一张'); return; }
+    /* 0 字节 = 相机（或某些 ROM）建了文件却没往里写。这种文件读出来是一段空 base64，
+     * 后面只会以「打不开」收场，不如在这里就说清楚是相机没存下来。 */
+    if (!file.size) {
+      toast('这个文件是空的：相机没把照片存下来。换一张，或者从相册里选。');
+      return;
+    }
     var preview = $('#wall-preview');
     if (preview) preview.innerHTML = '<div class="small muted">正在处理图片…</div>';
     readFileAsDataUrl(file, function (dataUrl) {
@@ -2575,17 +2588,186 @@
     });
   }
 
+  /* ---------------------------------------------------------- 照片详情 */
+  /* 照片不再只是「一张图」：点开是一页动态 —— 谁、哪天、文案、点赞、1–5 星、评论。
+   * 先用本地那份数据把页面铺出来（点开立刻有东西），再向服务器要一份最新的补上：
+   * 免费实例冷启动要几秒，等白了屏没人愿意点第二次。 */
+  var photoCur = null;      // { photo, comments }
+
+  function findFeedPhoto(id) {
+    for (var i = 0; i < photoFeed.length; i++) {
+      if (Number(photoFeed[i].id) === Number(id)) return photoFeed[i];
+    }
+    return null;
+  }
+
+  function syncFeedPhoto(id, patch) {
+    var p = findFeedPhoto(id);
+    if (!p) return;
+    for (var k in patch) if (Object.prototype.hasOwnProperty.call(patch, k)) p[k] = patch[k];
+  }
+
+  function agoText(ms) {
+    var d = Date.now() - Number(ms || 0);
+    if (!(d >= 0)) return '';
+    if (d < 60 * 1000) return '刚刚';
+    if (d < 3600 * 1000) return Math.floor(d / 60000) + ' 分钟前';
+    if (d < 24 * 3600 * 1000) return Math.floor(d / 3600000) + ' 小时前';
+    if (d < 7 * 24 * 3600 * 1000) return Math.floor(d / 86400000) + ' 天前';
+    return '';
+  }
+
+  function photoStarsHtml(p) {
+    var r = p.rating || {};
+    var mine = Number(r.mine) || 0;
+    var out = '<span class="pstars">';
+    for (var i = 1; i <= 5; i++) {
+      out += '<button class="pstar' + (i <= mine ? ' on' : '') + '" data-act="photo-rate" data-s="' + i +
+        '" aria-label="' + i + ' 星">★</button>';
+    }
+    out += '</span><span class="small muted">' +
+      (Number(r.count) ? ((Number(r.avg) || 0) + ' 分 · ' + r.count + ' 人打过') : '还没人打分') +
+      '</span>';
+    return out;
+  }
+
+  function photoDetailBody(p, comments) {
+    var who = p.mine ? '我' : ((p.author && p.author.displayName) || '好友');
+    var html = '';
+    if (p.url) html += '<div class="photo-full"><img src="' + esc(p.url) + '" alt=""></div>';
+    html += '<div class="photo-meta">' + esc(who) + ' · ' + esc(prettyDate(p.date)) + '</div>';
+    if (p.caption) {
+      html += '<div class="photo-cap">' + esc(p.caption) + '</div>';
+    } else if (p.mine) {
+      html += '<div class="photo-cap empty">还没写文案 —— 点「写点文案」补一句，好友才知道这是哪儿买的、多少钱。</div>';
+    }
+    html += '<div class="photo-acts">' +
+      '<button class="btn ghost small' + (p.likedByMe ? ' on' : '') + '" data-act="photo-like">' +
+      (p.likedByMe ? '❤️ 已赞 ' : '🤍 点赞 ') + (Number(p.likes) || 0) + '</button>' +
+      photoStarsHtml(p) + '</div>';
+    if (p.mine) {
+      html += '<div class="quick mt8">' +
+        '<button class="btn ghost small" data-act="wall-cap">写点文案</button>' +
+        '<button class="btn ghost small" data-act="wall-del" data-id="' + p.id + '">删除这张</button>' +
+        '</div>';
+    }
+    html += '<div class="photo-comments">';
+    if (!comments || !comments.length) {
+      html += '<div class="small muted">还没有评论，说两句。</div>';
+    } else {
+      for (var i = 0; i < comments.length; i++) {
+        var c = comments[i];
+        var name = (c.author && c.author.displayName) || '好友';
+        html += '<div class="pc-item"><div class="pc-head">' + esc(name) +
+          '<span class="small muted"> · ' + esc(agoText(c.createdAt)) + '</span>' +
+          (c.mine ? '<button class="pc-del" data-act="photo-cmt-del" data-id="' + c.id + '">删除</button>' : '') +
+          '</div><div class="pc-body">' + esc(c.body) + '</div></div>';
+      }
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderPhotoDetail() {
+    if (!photoCur) return;
+    var p = photoCur.photo;
+    var who = p.mine ? '我' : ((p.author && p.author.displayName) || '好友');
+    openSheet(who + '的照片', photoDetailBody(p, photoCur.comments),
+      '<input class="input" id="pc-input" maxlength="200" placeholder="说点什么…">' +
+      '<button class="btn" data-act="photo-comment">发送</button>');
+  }
+
   function openWallPhoto(id) {
-    var ph = null;
-    for (var i = 0; i < photoFeed.length; i++) if (photoFeed[i].id === Number(id)) { ph = photoFeed[i]; break; }
-    if (!ph) return;
-    var who = ph.mine ? '我' : ((ph.author && ph.author.displayName) || '好友');
-    var body = '<div class="photo-full"><img src="' + esc(ph.url) + '" alt=""></div>' +
-      '<div class="small muted mt8">' + esc(who) + ' · ' + esc(prettyDate(ph.date)) +
-      (ph.caption ? ' · ' + esc(ph.caption) : '') + '</div>';
-    var foot = '<button class="btn ghost" data-act="cancel">关闭</button>';
-    if (ph.mine) foot = '<button class="btn ghost danger" data-act="wall-del" data-id="' + ph.id + '">删除</button>' + foot;
-    openSheet('照片', body, foot);
+    var cached = findFeedPhoto(id);
+    if (!cached) return;
+    photoCur = { photo: cached, comments: [] };
+    renderPhotoDetail();
+    api.photoDetail(serverCfg(), id).then(function (r) {
+      if (r.error || !r.data || !r.data.photo) return;
+      if (!photoCur || Number(photoCur.photo.id) !== Number(id)) return;
+      photoCur = { photo: r.data.photo, comments: r.data.comments || [] };
+      syncFeedPhoto(id, {
+        likes: photoCur.photo.likes, likedByMe: photoCur.photo.likedByMe,
+        commentCount: photoCur.photo.commentCount, rating: photoCur.photo.rating,
+        caption: photoCur.photo.caption
+      });
+      renderPhotoDetail();
+    });
+  }
+
+  function photoLike() {
+    if (!photoCur) return;
+    var id = photoCur.photo.id;
+    api.likePhoto(serverCfg(), id).then(function (r) {
+      if (r.error) { toast('点赞没成功：' + (r.error || '稍后再试')); return; }
+      photoCur.photo.likes = Number(r.data && r.data.likes) || 0;
+      photoCur.photo.likedByMe = !!(r.data && r.data.liked);
+      syncFeedPhoto(id, { likes: photoCur.photo.likes, likedByMe: photoCur.photo.likedByMe });
+      renderPhotoDetail();
+    });
+  }
+
+  function photoRate(stars) {
+    if (!photoCur) return;
+    var id = photoCur.photo.id;
+    api.ratePhoto(serverCfg(), id, stars).then(function (r) {
+      if (r.error) { toast('打分没成功：' + (r.error || '稍后再试')); return; }
+      photoCur.photo.rating = (r.data && r.data.rating) || photoCur.photo.rating;
+      syncFeedPhoto(id, { rating: photoCur.photo.rating });
+      renderPhotoDetail();
+    });
+  }
+
+  function photoComment() {
+    if (!photoCur) return;
+    var inp = $('#pc-input');
+    var text = ((inp && inp.value) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!text) { toast('先写点什么'); return; }
+    var id = photoCur.photo.id;
+    api.addPhotoComment(serverCfg(), id, text).then(function (r) {
+      if (r.error) { toast('没发出去：' + (r.error || '稍后再试')); return; }
+      if (r.data && r.data.comment) photoCur.comments.push(r.data.comment);
+      photoCur.photo.commentCount = photoCur.comments.length;
+      syncFeedPhoto(id, { commentCount: photoCur.comments.length });
+      renderPhotoDetail();
+    });
+  }
+
+  function delPhotoComment(id) {
+    if (!photoCur) return;
+    api.deletePhotoComment(serverCfg(), id).then(function (r) {
+      if (r.error) { toast('没删掉：' + (r.error || '稍后再试')); return; }
+      photoCur.comments = photoCur.comments.filter(function (c) { return Number(c.id) !== Number(id); });
+      photoCur.photo.commentCount = photoCur.comments.length;
+      syncFeedPhoto(photoCur.photo.id, { commentCount: photoCur.comments.length });
+      renderPhotoDetail();
+    });
+  }
+
+  function openCaptionEditor() {
+    if (!photoCur) return;
+    openSheet('写点文案',
+      '<div class="field"><label>这一顿是什么情况</label>' +
+      '<input class="input" id="cap-input" maxlength="120" placeholder="楼下小碗菜，18 块，米饭没吃完" value="' +
+      esc(photoCur.photo.caption || '') + '"></div>' +
+      '<div class="small muted">写给好友看的。以后想找「哪家店值」，靠的就是这一句。</div>',
+      '<button class="btn ghost" data-act="cancel">取消</button>' +
+      '<button class="btn" data-act="cap-save">保存</button>');
+  }
+
+  function saveCaption() {
+    if (!photoCur) return;
+    var inp = $('#cap-input');
+    var cap = ((inp && inp.value) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    var id = photoCur.photo.id;
+    api.editPhotoCaption(serverCfg(), id, cap).then(function (r) {
+      if (r.error) { toast('没存上：' + (r.error || '稍后再试')); return; }
+      photoCur.photo.caption = cap;
+      syncFeedPhoto(id, { caption: cap });
+      toast('文案已保存');
+      renderPhotoDetail();
+      render();
+    });
   }
 
   function deleteWallPhoto(id) {
@@ -4099,6 +4281,24 @@
       case 'wall-open':
         openWallPhoto(el.getAttribute('data-id'));
         break;
+      case 'photo-like':
+        photoLike();
+        break;
+      case 'photo-rate':
+        photoRate(Number(el.getAttribute('data-s')) || 0);
+        break;
+      case 'photo-comment':
+        photoComment();
+        break;
+      case 'photo-cmt-del':
+        delPhotoComment(Number(el.getAttribute('data-id')));
+        break;
+      case 'wall-cap':
+        openCaptionEditor();
+        break;
+      case 'cap-save':
+        saveCaption();
+        break;
       case 'wall-del':
         deleteWallPhoto(Number(el.getAttribute('data-id')));
         break;
@@ -4391,6 +4591,11 @@
       if (state.view !== 'today') { state.view = 'today'; render(); return true; }
       return false;
     };
+    /* 安卓壳在「相机没把照片存下来」时会主动喊一声：网页这边收不到 change 事件，
+     * 不喊就只能看着按钮发呆。 */
+    window.__onPhotoFail = function (msg) {
+      toast(msg || '这张图没拿到，换一张试试');
+    };
   }
 
   function pickNextMeal() {
@@ -4665,6 +4870,17 @@
         photoFetchedAt = Date.now();
       },
       wallSend: function (img, cap, day) { wallImage = img || ''; wallDay = day || 'today'; sendWallPhoto(); },
+      /* 照片详情：点开后的那一页（点赞 / 打分 / 评论 / 文案） */
+      openWallPhoto: openWallPhoto,
+      photoDetailBody: photoDetailBody,
+      photoStarsHtml: photoStarsHtml,
+      photoLike: photoLike,
+      photoRate: photoRate,
+      photoComment: photoComment,
+      delPhotoComment: delPhotoComment,
+      saveCaption: saveCaption,
+      openCaptionEditor: openCaptionEditor,
+      getPhotoCur: function () { return photoCur; },
       getPhotoFeed: function () { return photoFeed; },
       view: function (v) { state.view = v; syncHash(); render(); },
       sheet: function (which, arg) {
