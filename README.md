@@ -360,13 +360,24 @@ JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默�
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
 | GET | `/api/storage/status` | 是 | `{ok,enabled,ready,bucket,endpoint,private,hasKey,dailyLimit,usedToday}`；`enabled:false` 表示没配 OSS，App 应该把上传入口藏掉 |
-| POST | `/api/photos` | 是 | `{image, date?, meal?, caption?, width?, height?, clientId?}` → `201 {ok, photo}`；图片是 data URL 或纯 base64 |
+| POST | `/api/photos` | 是 | `{image, date?, meal?, caption?, source?, width?, height?, clientId?}` → `201 {ok, photo}`；图片是 data URL 或纯 base64 |
 | GET | `/api/photos?date=YYYY-MM-DD` | 是 | `{date, photos:[...]}` 只返回自己的 |
-| GET | `/api/photos/feed?before=&limit=` | 是 | 我 + 好友的照片流 `{photos, hasMore, nextBefore}`，按时间倒序 |
+| GET | `/api/photos/feed?before=&limit=&meals=` | 是 | 我 + 好友的照片流 `{photos, hasMore, nextBefore}`，按时间倒序；`meals=1` 只看每顿饭的照片 |
 | DELETE | `/api/photos/:id` | 是 | 只能删自己的；会顺手删 OSS 上的对象 |
 
-`photo` 的形状：`{id, date, meal, url, width, height, bytes, caption, createdAt}`。
+`photo` 的形状：`{id, date, meal, url, width, height, bytes, caption, source, createdAt}`。
 `url` 是 OSS 的地址（`OSS_PRIVATE=1` 时是 1 小时到期的签名链接）。
+
+`source` 只有两个值：
+
+| 值 | 谁写的 | 出现在哪 |
+|---|---|---|
+| `meal` | 识别结果面板里的「存到今天的动态」 | 照片流 + **动态卡片下面** |
+| `wall` | 照片页自己「拍照 / 从相册选」发的 | 只在照片流 |
+
+不传或传了别的值一律按 `wall` 处理（v0.7.6 及以前的老客户端不传这个字段，
+所以老照片不会突然被当成饭照挂到动态上）。`photosByOwners()` 只取 `meal`，
+这就是「动态里只有每顿饭的图」的实现方式。
 
 - 图片**不进数据库**，只存 `object_key`；`photos` 表一行 = 一张图。
 - 上传走服务器转发（不是客户端直传）：图压到 100–200 KB，过一下服务器几十毫秒，
