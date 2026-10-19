@@ -121,6 +121,34 @@ const SCHEMA_STATEMENTS = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, date)
   )`,
+  // 饭菜照片：一行一张，object_key 指向阿里云 OSS 里的对象。
+  // 图片本体不放这里（5 GB 免费额度几个月就满，而且看图要过服务器、没法上 CDN）。
+  // 按 (user_id, date) 关联而不是 post_id：重新发布当天动态时 posts 是删了重插的，
+  // 照片不该跟着掉；发布/覆盖只影响可见性，不影响照片本身。
+  `CREATE TABLE IF NOT EXISTS photos (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date       TEXT    NOT NULL,
+    meal       TEXT    NOT NULL DEFAULT 'lunch',
+    object_key TEXT    NOT NULL,
+    mime       TEXT    NOT NULL DEFAULT 'image/jpeg',
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    width      INTEGER NOT NULL DEFAULT 0,
+    height     INTEGER NOT NULL DEFAULT 0,
+    caption    TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_photos_user_date ON photos(user_id, date)`,
+  // 给好友的这顿饭打分（1–5 星）。主键 (作者, 日期, 打分人) 而不是 post_id：
+  // 理由同 photos —— 重新发布动态不该把别人打过的分丢掉。
+  `CREATE TABLE IF NOT EXISTS post_ratings (
+    author_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date       TEXT    NOT NULL,
+    rater_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stars      INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (author_id, date, rater_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS user_profile (
     user_id    INTEGER NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     data_json  TEXT    NOT NULL DEFAULT '{}',

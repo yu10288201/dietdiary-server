@@ -11,6 +11,7 @@ import 'dotenv/config';
 
 import { all, get, initDb, run, dbUrl } from './db.js';
 import { visionRouter } from './vision.js';
+import { photosByOwners, photosRouter } from './photos.js';
 import {
   backfillUserUids,
   cleanupExpiredSessions,
@@ -36,6 +37,8 @@ app.use(cors());                                  // App 直连，放开跨域
 // 拍照识别（/api/recognize）要收 base64 图片，自己在路由级挂了 4MB 的解析器，
 // 所以必须挂在下面这个全局 1MB 解析器之前；其它 /api 请求原样落到下一行。
 app.use('/api', visionRouter);
+// 照片上传同理（路由级自带 4MB 解析器），也必须排在全局解析器前面
+app.use('/api', photosRouter);
 app.use(express.json({ limit: '1mb' }));          // 动态体不大，1MB 足够
 
 // ---------------------------------------------------------------- 通用工具
@@ -725,25 +728,10 @@ app.post('/api/posts', requireAuth, h(async (req, res) => {
     [req.user.id, date, goalText, JSON.stringify(meals), JSON.stringify(totals), now, now]
   );
 
-  res.status(201).json({
-    post: {
-      id: result.lastInsertRowid,
-      userId: req.user.id,
-      username: req.user.username,
-      displayName: req.user.displayName,
-      avatarColor: req.user.avatarColor,
-      date,
-      goalText,
-      meals,
-      totals,
-      likes: 0,
-      likedByMe: false,
-      commentCount: 0,
-      comments: [],
-      createdAt: now,
-      updatedAt: now
-    }
-  });
+  // 用 shapePosts 统一形状，照片和打分也一起带上（发布后立刻能看到自己当天的图）
+  const row = await get('SELECT * FROM posts WHERE id = ?', [result.lastInsertRowid]);
+  const [post] = await shapePosts(req.user.id, [row]);
+  res.status(201).json({ post });
 }));
 
 // 删掉自己某天的动态
@@ -796,6 +784,28 @@ async function shapePosts(viewerId, postRows) {
   const authorMap = await mapUsersByIds(postRows.map((p) => p.user_id));
   const commentUserMap = await mapUsersByIds(commentRows.map((c) => c.user_id));
 
+  // 照片按 (作者, 日期) 批量取，一条 SQL 解决整页动态
+  const photoMap = await photosByOwners(
+    postRows.map((p) => ({ userId: Number(p.user_id), date: p.date }))
+  );
+
+  // 打分同理：一次查出整页涉及的所有 (作者, 日期)
+  const ratingPairs = postRows.map((p) => [Number(p.user_id), p.date]);
+  const ratingRows = await all(
+    `SELECT author_id, date, rater_id, stars FROM post_ratings
+      WHERE ${ratingPairs.map(() => '(author_id = ? AND date = ?)').join(' OR ')}`,
+    ratingPairs.flat()
+  );
+  const ratingSum = new Map();
+  const ratingCount = new Map();
+  const ratingMine = new Map();
+  for (const r of ratingRows) {
+    const rk = `${Number(r.author_id)}|${r.date}`;
+    ratingSum.set(rk, (ratingSum.get(rk) || 0) + Number(r.stars));
+    ratingCount.set(rk, (ratingCount.get(rk) || 0) + 1);
+    if (Number(r.rater_id) === viewerId) ratingMine.set(rk, Number(r.stars));
+  }
+
   return postRows.map((post) => {
     const pid = Number(post.id);
     const author = authorMap.get(Number(post.user_id)) || {};
@@ -813,6 +823,8 @@ async function shapePosts(viewerId, postRows) {
         mine: Number(c.user_id) === viewerId
       };
     });
+    const key = `${Number(post.user_id)}|${post.date}`;
+    const n = ratingCount.get(key) || 0;
     return {
       id: pid,
       userId: Number(post.user_id),
@@ -823,6 +835,12 @@ async function shapePosts(viewerId, postRows) {
       goalText: post.goal_text,
       meals,
       totals,
+      photos: photoMap.get(key) || [],
+      rating: {
+        avg: n ? Math.round((ratingSum.get(key) / n) * 10) / 10 : 0,
+        count: n,
+        mine: ratingMine.get(key) || 0
+      },
       likes: likeCount.get(pid) || 0,
       likedByMe: likedByMe.has(pid),
       commentCount: commentCount.get(pid) || 0,
@@ -898,6 +916,45 @@ app.post('/api/posts/:id/like', requireAuth, h(async (req, res) => {
   }
   const countRow = await get('SELECT COUNT(*) AS c FROM likes WHERE post_id = ?', [postId]);
   res.json({ liked, likes: Number(countRow?.c || 0) });
+}));
+
+/** 给这顿饭打分：1–5 星；stars=0 表示取消打分。同一人重复打 = 覆盖。 */
+app.post('/api/posts/:id/rate', requireAuth, h(async (req, res) => {
+  const postId = Number(req.params.id);
+  if (!Number.isFinite(postId) || postId <= 0) throw new HttpError(400, 'id 无效');
+  const post = await loadVisiblePost(postId, req.user.id);
+
+  const stars = Math.round(Number((req.body || {}).stars));
+  if (!Number.isFinite(stars) || stars < 0 || stars > 5) {
+    throw new HttpError(400, 'stars 需要是 0–5 的整数（0 = 取消打分）');
+  }
+  const authorId = Number(post.user_id);
+  const date = post.date;
+
+  if (stars === 0) {
+    await run('DELETE FROM post_ratings WHERE author_id = ? AND date = ? AND rater_id = ?',
+      [authorId, date, req.user.id]);
+  } else {
+    await run(
+      `INSERT INTO post_ratings (author_id, date, rater_id, stars, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(author_id, date, rater_id)
+       DO UPDATE SET stars = excluded.stars, updated_at = excluded.updated_at`,
+      [authorId, date, req.user.id, stars, Date.now()]
+    );
+  }
+
+  const row = await get(
+    'SELECT COUNT(*) AS n, COALESCE(AVG(stars), 0) AS avg FROM post_ratings WHERE author_id = ? AND date = ?',
+    [authorId, date]
+  );
+  res.json({
+    rating: {
+      avg: Math.round((Number(row?.avg) || 0) * 10) / 10,
+      count: Number(row?.n) || 0,
+      mine: stars
+    }
+  });
 }));
 
 app.post('/api/posts/:id/comments', requireAuth, h(async (req, res) => {

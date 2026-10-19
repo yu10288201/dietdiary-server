@@ -1,4 +1,4 @@
-﻿# 饮食记录 · 社交功能后端（Express + Turso）
+# 饮食记录 · 社交功能后端（Express + Turso）
 
 给「饮食记录」Android App 用的社交后端：注册登录、好友、每日动态 feed、点赞、评论、催更、App 版本检查。
 全部跑在**免费额度**上：数据库 **Turso**（libSQL，免费档 100 个库 / 共 5 GB 存储 / 每月 5 亿次行读、1000 万次行写），
@@ -354,6 +354,36 @@ JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默�
 
 > 「吃了多少 / 花了多少钱 / 备注」这三样只存在 App 本地和用户自己的日记里，
 > 服务端不参与计算，也不进模型提示词 —— 热量是按「份量 × 吃了多少」在前端算的。
+
+### 饭菜照片（v0.7.3）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/api/storage/status` | 是 | `{ok,enabled,ready,bucket,endpoint,private,hasKey,dailyLimit,usedToday}`；`enabled:false` 表示没配 OSS，App 应该把上传入口藏掉 |
+| POST | `/api/photos` | 是 | `{image, date?, meal?, caption?, width?, height?, clientId?}` → `201 {ok, photo}`；图片是 data URL 或纯 base64 |
+| GET | `/api/photos?date=YYYY-MM-DD` | 是 | `{date, photos:[...]}` 只返回自己的 |
+| DELETE | `/api/photos/:id` | 是 | 只能删自己的；会顺手删 OSS 上的对象 |
+
+`photo` 的形状：`{id, date, meal, url, width, height, bytes, caption, createdAt}`。
+`url` 是 OSS 的地址（`OSS_PRIVATE=1` 时是 1 小时到期的签名链接）。
+
+- 图片**不进数据库**，只存 `object_key`；`photos` 表一行 = 一张图。
+- 上传走服务器转发（不是客户端直传）：图压到 100–200 KB，过一下服务器几十毫秒，
+  省掉了「给 Bucket 配 CORS」这个最容易出错的一步。
+- 限额：每人每天 30 张（`PHOTO_DAILY_LIMIT`），单张 ≤ 3 MB（`PHOTO_MAX_BYTES`），
+  备注 ≤ 120 字。按文件头魔数判断 JPEG/PNG/WebP，不看 MIME 也不看扩展名。
+- 没配 OSS 时 `POST /api/photos` 回 **503** 并给出人话提示，识别与记录不受影响。
+
+### 给好友的饭打分
+
+`POST /api/posts/:id/rate`，body `{stars: 1..5}`，`stars: 0` = 取消。只能给好友（或自己）的动态打分。
+
+返回 `{rating: {avg, count, mine}}`，`avg` 保留一位小数。一张动态一个用户一行
+（`post_ratings` 表，主键 `(post_id, user_id)`），所以重复打分是覆盖不是累加。
+`GET /api/feed`、`GET /api/posts/:id` 返回的每条 post 都带这个 `rating` 字段，
+没配表之前的老客户端忽略它即可。
+
+配置见根 README 的「v0.7.3」小节（`OSS_ACCESS_KEY_ID` 等 6 个环境变量）。
 
 ### feed 返回结构
 
