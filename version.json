@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  1000013,
-                    "versionName":  "0.7.4",
+                    "versionCode":  1000014,
+                    "versionName":  "0.7.5",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "好友页新增「照片」分段：我和好友的照片按天分组铺成九宫格，点开看大图；发照片可以从识别时留下的「最近拍的」一键分享，也可以单独拍照上传",
+                    "notes":  "修一个会让照片发不出去的坑：iPhone 的 HEIC（或损坏的图）以前只会提示「稍后再试」，现在会直接告诉你格式不支持、需要在相册里导出成 JPG",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-19T12:52:30Z",
+                    "publishedAt":  "2026-10-19T14:12:18Z",
                     "channel":  "stable",
-                    "sha256":  "2aaba3331afabf7773833fcb834fc54004dc0b37cb40398119e46cd045d92321",
+                    "sha256":  "8f65952a6df26278e67e5ccc88f602639695d9cda7d3c934f936f75df933876d",
                     "size":  169241
                 }
 }

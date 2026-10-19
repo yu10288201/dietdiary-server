@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.7.4';
-  var APP_VERSION_CODE = 1000013;
+  var APP_VERSION = '0.7.5';
+  var APP_VERSION_CODE = 1000014;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -1703,6 +1703,10 @@
    */
   var RECOG_EDGE = 896;        // 长边上限。再大只是多花 token，认菜没变准
   var RECOG_QUALITY = 0.72;    // JPEG 质量：896px@0.72 大约 100–200 KB
+  /* 图打不开时统一说这一句。iPhone 的 HEIC、微信存的 .dat、被截断的文件都会走到这里：
+   * 浏览器自己都解不出来，服务端也只会按魔数拒掉，先说清楚才不会让人以为「网络不好」。 */
+  var BAD_IMAGE_TEXT = '这张图打不开，可能不是 JPG/PNG（iPhone 的 HEIC 就属于这种），' +
+    '或者文件已经损坏。在相册里点「导出为 JPG」再试，或者直接换一张。';
   var recogOut = null;         // 最近一次识别结果 { items, note, model }
   var recogBusy = false;
   var recogPending = null;     // 图糊/太暗时先攒着，等用户点「就这样识别」
@@ -1968,6 +1972,7 @@
     var hint;
     if (r.status === 503) hint = '服务器上还没配视觉模型的 Key，配好再试（见 README 的「拍照识别」一节）。';
     else if (r.status === 413) hint = '图片太大了，换一张再试。';
+    else if (r.status === 415) hint = BAD_IMAGE_TEXT;
     else if (r.status === 401) hint = '登录过期了，去「我的」重新登录。';
     else if (r.status === 429) hint = '今天的次数用完了（每人每天 5 次），明天再来；也可以用下面第二个按钮手动记。';
     else if (!r.status) hint = '连不上服务器。这张图已经留在手机上了，等有网再点「稍后重试」就行。';
@@ -2133,8 +2138,10 @@
       try { out = cv.toDataURL('image/jpeg', RECOG_QUALITY) || dataUrl; } catch (e) { /* 保持原图 */ }
       cb(out, photoMetrics(cv, dw, dh));
     };
-    // HEIC 之类解不开的就原样发，让服务端去拒，至少能看到明确的报错
-    img.onerror = function () { cb(dataUrl, null); };
+    /* 解不开（HEIC / 损坏 / 不是图片）就回 null，**不要**把原图递上去：
+     * 原图 WebView 自己都画不出来（预览是一片空白），服务端也会按魔数拒掉 415，
+     * 用户只能看到一句「稍后再试」，根本猜不到是格式问题。 */
+    img.onerror = function () { cb(null, null); };
     img.src = dataUrl;
   }
 
@@ -2201,6 +2208,12 @@
         return;
       }
       shrinkImage(raw, function (small, m) {
+        if (!small) {
+          out.innerHTML = '<div class="field"><div class="small muted">' + esc(BAD_IMAGE_TEXT) + '</div>' +
+            '<div class="quick mt12"><button class="btn ghost" data-act="recog-pick">换一张</button>' +
+            '<button class="btn ghost" data-act="recog-manual">手动记一条</button></div></div>';
+          return;
+        }
         var bad = qualityHint(m);
         if (bad) {
           /* 先别发：一天只有 5 次，糊图发出去大概率是浪费一次。
@@ -2301,8 +2314,10 @@
       if (r.error) {
         var msg = r.status === 503 ? '服务器还没开照片存储（见 README 的「照片存储」一节）'
           : r.status === 413 ? '这张图太大了'
+          : r.status === 415 ? '这张图的格式不支持，换一张 JPG'
           : r.status === 429 ? '今天的照片数量用完了'
-          : '没存上，稍后再试';
+          : r.status === 401 ? '登录过期了，重新登录一下'
+          : ('没存上：' + (r.error || '稍后再试'));
         toast(msg);
         return;
       }
@@ -2506,7 +2521,13 @@
     readFileAsDataUrl(file, function (dataUrl) {
       if (!dataUrl) { toast('这张图读不出来，换一张试试'); return; }
       shrinkImage(dataUrl, function (small) {
-        wallImage = small || dataUrl;
+        if (!small) {
+          wallImage = '';
+          if (preview) preview.innerHTML = '<div class="small muted">' + esc(BAD_IMAGE_TEXT) + '</div>';
+          toast('这张图打不开，换一张 JPG');
+          return;
+        }
+        wallImage = small;
         if (preview) preview.innerHTML = '<div class="recog-photo"><img src="' + wallImage + '" alt=""></div>';
         var btn = $('[data-act="wall-choose"]');
         if (btn) btn.textContent = '换一张';
@@ -2536,9 +2557,10 @@
       if (r.error) {
         var msg = r.status === 503 ? '服务器还没开照片存储（见 README）'
           : r.status === 413 ? '这张图太大了'
+          : r.status === 415 ? '这张图的格式不支持，换一张 JPG'
           : r.status === 429 ? '今天存的照片到上限了（每天 30 张）'
           : r.status === 401 ? '登录过期了，重新登录一下'
-          : '没传上去，稍后再试';
+          : ('没传上去：' + (r.error || '稍后再试'));
         toast(msg);
         if (btn) { btn.textContent = '上传'; btn.disabled = false; }
         return;
