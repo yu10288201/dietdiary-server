@@ -117,6 +117,16 @@
     if (path.indexOf('/api/storage/status') === 0) {
       return { data: { ok: true, enabled: true, ready: true, bucket: 'demo', endpoint: 'demo', private: false, hasKey: true, dailyLimit: 30, usedToday: 0 } };
     }
+    if (path.indexOf('/api/photos/feed') === 0) {
+      return { data: {
+        photos: [
+          { id: 1, date: dstr, meal: 'lunch', url: '', caption: '番茄炒蛋 + 米饭', createdAt: Date.now(), mine: true,
+            author: { id: 1, displayName: '我', avatarColor: '#5BA67C', uid: 'DEMO01' } },
+          { id: 2, date: dstr, meal: 'dinner', url: '', caption: '楼下小碗菜', createdAt: Date.now() - 3600000, mine: false,
+            author: { id: 2, displayName: '演示好友', avatarColor: '#E08A3C', uid: 'DEMO02' } }
+        ],
+        hasMore: false, nextBefore: 0 } };
+    }
     if (path.indexOf('/api/photos') === 0) {
       var cap = (opts.body && opts.body.caption) || '';
       var w = (opts.body && opts.body.width) || 0;
@@ -353,6 +363,14 @@
     /** 我某天已经存了哪些照片 */
     photosOfDay: function (cfg, date) {
       return request(cfg, '/api/photos?date=' + encodeURIComponent(date || ''), { timeout: 30000 });
+    },
+
+    /** 朋友圈：我 + 好友的照片，按时间倒序。before = 上一页最后一张的 createdAt */
+    photoFeed: function (cfg, before, limit) {
+      var q = [];
+      if (before) q.push('before=' + encodeURIComponent(before));
+      if (limit) q.push('limit=' + encodeURIComponent(limit));
+      return request(cfg, '/api/photos/feed' + (q.length ? '?' + q.join('&') : ''), { timeout: 30000 });
     },
 
     deletePhoto: function (cfg, id) {

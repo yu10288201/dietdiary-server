@@ -710,13 +710,13 @@ body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
   gap: 6px; margin-top: 8px;
 }
 .feed-photo {
-  display: block; padding: 0; border: 0; background: var(--surface-2);
+  display: block; padding: 0 0 75% 0; height: 0; border: 0; background: var(--surface-2);
   border-radius: var(--radius-sm); overflow: hidden; cursor: pointer;
-  aspect-ratio: 4 / 3; position: relative;
+  position: relative;
 }
-.feed-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.feed-photo img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 .feed-photo.more {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; height: auto; padding: 0;
   font-size: 15px; font-weight: 600; color: var(--text-2);
   background: var(--surface-2);
 }
@@ -726,3 +726,30 @@ body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
   width: 100%; max-height: 62vh; object-fit: contain;
   border-radius: var(--radius); background: var(--surface-2); display: block;
 }
+
+/* ------------------------------------------------------- 照片墙（朋友圈） */
+.wall-add-card { padding: 10px; }
+.wall-add { width: 100%; padding: 14px; font-size: 14px; }
+.wall-recent { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 4px; }
+.wall-recent-item {
+  flex: 0 0 auto; width: 88px; height: 88px; padding: 0; border: 0;
+  border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2);
+  cursor: pointer; box-shadow: var(--shadow);
+}
+.wall-recent-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wall-day { margin-bottom: 14px; }
+.wall-day-head { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 10px 2px 7px; }
+.wall-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.wall-tile {
+  position: relative; padding: 0 0 100% 0; height: 0; border: 0; background: var(--surface-2);
+  border-radius: var(--radius-sm); overflow: hidden;
+  cursor: pointer; display: block;
+}
+.wall-tile img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.wall-who {
+  position: absolute; left: 4px; bottom: 4px; max-width: calc(100% - 8px);
+  font-size: 10px; line-height: 1.2; padding: 2px 5px; border-radius: 6px;
+  color: #fff; background: rgba(0, 0, 0, .45);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body.dark .wall-tile, body.dark .wall-recent-item { background: var(--surface-2); }

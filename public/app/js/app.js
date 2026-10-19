@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.7.3';
-  var APP_VERSION_CODE = 1000012;
+  var APP_VERSION = '0.7.4';
+  var APP_VERSION_CODE = 1000013;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -1026,10 +1026,11 @@
     html += '</div>';
 
     html += '<div class="segmented">' +
-      seg('feed', '动态') + seg('friends', '好友') +
+      seg('feed', '动态') + seg('photos', '照片') + seg('friends', '好友') +
       '</div>';
 
     if (state.feedTab === 'friends') html += friendList();
+    else if (state.feedTab === 'photos') html += photoWallHtml();
     else html += feedList();
 
     html += '</div>';
@@ -2237,6 +2238,7 @@
       savePendingPhoto('');
       var data = r.data || {};
       recogOut = { items: data.items || [], note: data.note || '', model: data.model || '', small: small };
+      pushRecentPhoto(small);   // 照片墙「最近拍的」直接就能拿来分享
       out.innerHTML = recogListHtml(recogOut, Math.round((Date.now() - t0) / 1000));
       var q = $('#recog-quota');
       if (q && data.remainingToday !== undefined) {
@@ -2321,7 +2323,260 @@
     else btn.textContent = '📷 存到今天的动态';
   }
 
-  /* ------------------------------------------------------- custom food */
+  /* ---------------------------------------------------------- 照片墙（朋友圈） */
+  /* 好友页的第三个分段：我 + 好友的照片，按时间倒序。
+   *
+   * 两个入口：
+   *   1. 拍照识别留下来的图 —— 识别成功时顺手存一张进本地「最近识别」（最多 3 张，
+   *      只留压缩后的 896px 版本，约 100 KB/张），照片墙顶部点一下就直接分享，
+   *      不用为了发一条动态再拍一次；
+   *   2. 照片墙自己的「拍照 / 从相册选」。
+   *
+   * 分页用游标（before = 上一页最后一张的 createdAt）而不是 offset：
+   * 翻页时有好友新传了照片，offset 会漏一张或重一张。 */
+
+  var RECENT_KEY = 'shike_recog_recent';
+  var RECENT_MAX = 3;
+
+  var photoFeed = [];        // 我 + 好友的照片，最新在前
+  var photoCursor = 0;
+  var photoHasMore = true;
+  var photoLoading = false;
+  var photoFetchedAt = 0;
+  var wallImage = '';        // 正在发的那张（data URL）
+  var wallBusy = false;
+  var wallDay = 'today';     // 这张照片算哪天的：today / yesterday
+
+  function loadRecentPhotos() {
+    try {
+      var raw = window.localStorage.getItem(RECENT_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter(function (x) { return typeof x === 'string' && x.slice(0, 11) === 'data:image/'; }) : [];
+    } catch (e) { return []; }
+  }
+
+  function pushRecentPhoto(dataUrl) {
+    if (!dataUrl) return;
+    if (dataUrl.length > 400 * 1024) return;   // 太大的不占本地空间
+    try {
+      var arr = loadRecentPhotos();
+      // 同一张图不重复存：比对前 200 个字符足够区分
+      arr = arr.filter(function (x) { return x.slice(0, 200) !== dataUrl.slice(0, 200); });
+      arr.unshift(dataUrl);
+      window.localStorage.setItem(RECENT_KEY, JSON.stringify(arr.slice(0, RECENT_MAX)));
+    } catch (e) { /* 隐私模式 / 配额满：不存也不影响识别 */ }
+  }
+
+  function dropRecentPhoto(dataUrl) {
+    try {
+      var arr = loadRecentPhotos().filter(function (x) { return x !== dataUrl; });
+      window.localStorage.setItem(RECENT_KEY, JSON.stringify(arr));
+    } catch (e) {}
+  }
+
+  function photoWallHtml() {
+    var html = '';
+
+    var recent = loadRecentPhotos();
+    if (recent.length) {
+      html += '<div class="card"><div class="card-head"><h2>最近拍的</h2>' +
+        '<span class="hint">点一下直接分享</span></div><div class="wall-recent">';
+      for (var i = 0; i < recent.length; i++) {
+        html += '<button class="wall-recent-item" data-act="wall-import" data-i="' + i + '">' +
+          '<img src="' + recent[i] + '" alt=""></button>';
+      }
+      html += '</div></div>';
+    }
+
+    html += '<div class="card wall-add-card">' +
+      '<button class="btn ghost wall-add" data-act="wall-pick">📷 拍照 / 从相册选</button>' +
+      '</div>';
+
+    if (!photoFeed.length) {
+      html += '<div class="card center muted">' +
+        (photoLoading ? '正在加载…'
+          : '还没有照片<br><span class="small">拍一张发出来，好友就能看到、能给你这顿打分</span>') +
+        '</div>';
+      return html;
+    }
+
+    // 按日期分组，同一天的照片铺成三列
+    var byDate = {};
+    var order = [];
+    for (var j = 0; j < photoFeed.length; j++) {
+      var p = photoFeed[j];
+      var d = p.date || '';
+      if (!byDate[d]) { byDate[d] = []; order.push(d); }
+      byDate[d].push(p);
+    }
+    for (var k = 0; k < order.length; k++) {
+      var day = order[k];
+      var list = byDate[day];
+      html += '<div class="wall-day"><div class="wall-day-head">' + esc(prettyDate(day)) +
+        '<span class="small muted"> · ' + list.length + ' 张</span></div>' +
+        '<div class="wall-grid">';
+      for (var m = 0; m < list.length; m++) {
+        var ph = list[m];
+        html += '<button class="wall-tile" data-act="wall-open" data-id="' + ph.id + '">' +
+          (ph.url ? '<img src="' + esc(ph.url) + '" alt="" loading="lazy">' : '<span class="small muted">图片没存上</span>') +
+          (ph.mine ? '' : '<span class="wall-who">' + esc((ph.author && ph.author.displayName) || '好友') + '</span>') +
+          '</button>';
+      }
+      html += '</div></div>';
+    }
+
+    if (photoHasMore) {
+      html += '<div class="card center"><button class="btn ghost" data-act="wall-more">' +
+        (photoLoading ? '正在加载…' : '看更早的') + '</button></div>';
+    }
+    return html;
+  }
+
+  function pullPhotoFeed(force) {
+    if (!serverOn() || !state.server.token) {
+      photoFeed = []; photoHasMore = false; photoLoading = false;
+      return;
+    }
+    if (photoLoading) return;
+    if (!force && photoFeed.length && Date.now() - photoFetchedAt < 60 * 1000) return;
+    photoLoading = true;
+    if (state.view === 'social' && state.feedTab === 'photos') render();
+    api.photoFeed(serverCfg(), 0, 24).then(function (r) {
+      photoLoading = false;
+      if (r && !r.error) {
+        var d = r.data || {};
+        photoFeed = d.photos || [];
+        photoCursor = d.nextBefore || 0;
+        photoHasMore = !!d.hasMore;
+        photoFetchedAt = Date.now();
+      }
+      if (state.view === 'social' && state.feedTab === 'photos') render();
+    });
+  }
+
+  function loadMorePhotos() {
+    if (photoLoading || !photoHasMore || !photoCursor) return;
+    photoLoading = true;
+    render();
+    api.photoFeed(serverCfg(), photoCursor, 24).then(function (r) {
+      photoLoading = false;
+      if (r && !r.error) {
+        var d = r.data || {};
+        photoFeed = photoFeed.concat(d.photos || []);
+        photoCursor = d.nextBefore || 0;
+        photoHasMore = !!d.hasMore;
+      }
+      if (state.view === 'social' && state.feedTab === 'photos') render();
+    });
+  }
+
+  function openWallComposer(prefill) {
+    if (!serverOn() || !state.server.token) { toast('先在设置里连上服务器才能发照片'); return; }
+    wallImage = prefill || '';
+    var body =
+      '<div class="field"><label>照片</label>' +
+      '<input type="file" id="wall-file" accept="image/*" class="recog-file">' +
+      '<div id="wall-preview">' + (wallImage
+        ? '<div class="recog-photo"><img src="' + wallImage + '" alt=""></div>'
+        : '<div class="small muted">还没选。点下面的按钮拍照或从相册挑一张。</div>') + '</div>' +
+      '<div class="mt8"><button class="btn ghost small" data-act="wall-choose">' +
+      (wallImage ? '换一张' : '拍照 / 从相册选') + '</button></div></div>' +
+      '<div class="field"><label>说点什么（可选）</label>' +
+      '<input class="input" id="wall-caption" maxlength="120" placeholder="今天的午饭，楼下小碗菜"></div>' +
+      '<div class="field"><label>算在哪一天</label>' +
+      '<div class="quick">' +
+      '<button data-act="wall-day" data-d="today" class="' + (wallDay === 'today' ? 'on' : '') + '">今天</button>' +
+      '<button data-act="wall-day" data-d="yesterday" class="' + (wallDay === 'yesterday' ? 'on' : '') + '">昨天</button>' +
+      '</div></div>';
+    openSheet('发一张照片', body,
+      '<button class="btn ghost" data-act="cancel">取消</button>' +
+      '<button class="btn" data-act="wall-send">' + (wallBusy ? '上传中…' : '上传') + '</button>');
+    var input = $('#wall-file');
+    if (input) {
+      input.addEventListener('change', function () { onWallPick(input); });
+    }
+  }
+
+  function onWallPick(input) {
+    var file = input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { toast('这张图太大了，换一张'); return; }
+    var preview = $('#wall-preview');
+    if (preview) preview.innerHTML = '<div class="small muted">正在处理图片…</div>';
+    readFileAsDataUrl(file, function (dataUrl) {
+      if (!dataUrl) { toast('这张图读不出来，换一张试试'); return; }
+      shrinkImage(dataUrl, function (small) {
+        wallImage = small || dataUrl;
+        if (preview) preview.innerHTML = '<div class="recog-photo"><img src="' + wallImage + '" alt=""></div>';
+        var btn = $('[data-act="wall-choose"]');
+        if (btn) btn.textContent = '换一张';
+      });
+    });
+  }
+
+  function wallDate() {
+    return wallDay === 'yesterday' ? shiftDay(today(), -1) : today();
+  }
+
+  function sendWallPhoto() {
+    if (!wallImage) { toast('先选一张照片'); return; }
+    if (wallBusy) return;
+    var cap = ($('#wall-caption') && $('#wall-caption').value || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    wallBusy = true;
+    var btn = $('[data-act="wall-send"]');
+    if (btn) { btn.textContent = '上传中…'; btn.disabled = true; }
+    api.uploadPhoto(serverCfg(), {
+      image: wallImage,
+      date: wallDate(),
+      meal: picker.meal,
+      caption: cap,
+      clientId: newClientId()
+    }).then(function (r) {
+      wallBusy = false;
+      if (r.error) {
+        var msg = r.status === 503 ? '服务器还没开照片存储（见 README）'
+          : r.status === 413 ? '这张图太大了'
+          : r.status === 429 ? '今天存的照片到上限了（每天 30 张）'
+          : r.status === 401 ? '登录过期了，重新登录一下'
+          : '没传上去，稍后再试';
+        toast(msg);
+        if (btn) { btn.textContent = '上传'; btn.disabled = false; }
+        return;
+      }
+      dropRecentPhoto(wallImage);
+      wallImage = '';
+      closeSheet();
+      toast('照片发出去了');
+      state.feedTab = 'photos';
+      pullPhotoFeed(true);
+      render();
+    });
+  }
+
+  function openWallPhoto(id) {
+    var ph = null;
+    for (var i = 0; i < photoFeed.length; i++) if (photoFeed[i].id === Number(id)) { ph = photoFeed[i]; break; }
+    if (!ph) return;
+    var who = ph.mine ? '我' : ((ph.author && ph.author.displayName) || '好友');
+    var body = '<div class="photo-full"><img src="' + esc(ph.url) + '" alt=""></div>' +
+      '<div class="small muted mt8">' + esc(who) + ' · ' + esc(prettyDate(ph.date)) +
+      (ph.caption ? ' · ' + esc(ph.caption) : '') + '</div>';
+    var foot = '<button class="btn ghost" data-act="cancel">关闭</button>';
+    if (ph.mine) foot = '<button class="btn ghost danger" data-act="wall-del" data-id="' + ph.id + '">删除</button>' + foot;
+    openSheet('照片', body, foot);
+  }
+
+  function deleteWallPhoto(id) {
+    api.deletePhoto(serverCfg(), id).then(function (r) {
+      if (r.error) { toast('没删掉：' + (r.error || '稍后再试')); return; }
+      photoFeed = photoFeed.filter(function (p) { return p.id !== Number(id); });
+      closeSheet();
+      toast('已删除');
+      render();
+    });
+  }
+
+
   /* 新建自定义食物：两种填法
    *   serving —— 按「这一份 / 这一顿」填总量（默认）。出去吃一顿、点一杯奶茶，
    *              手里只有「这顿大概多少卡、多少蛋白」，谁也不会先换算成每 100 克。
@@ -3522,7 +3777,10 @@
         // 切标签时顺手把这一页需要的服务器数据补一次（节流在 due() 里，
         // 来回点不会把同一个请求打很多遍）。以前什么都不拉，所以「切过去
         // 还是老数据，得退出去重进」。
-        if (state.view === 'social') refreshSocial(false);
+        if (state.view === 'social') {
+          if (state.feedTab === 'photos') pullPhotoFeed(false);
+          else refreshSocial(false);
+        }
         else if (state.view === 'today') { pullDiary(true); }
         else if (state.view === 'me') { pullProfile(true); }
         break;
@@ -3780,7 +4038,47 @@
         save(); closeSheet();
         break;
       case 'feed-tab':
-        state.feedTab = el.getAttribute('data-tab'); render();
+        state.feedTab = el.getAttribute('data-tab');
+        save();
+        render();
+        if (state.feedTab === 'photos') pullPhotoFeed(false);
+        break;
+      /* ---------------------------------------------------------- 照片墙 */
+      case 'wall-pick':
+        openWallComposer('');
+        break;
+      case 'wall-choose': {
+        var wf = $('#wall-file');
+        if (wf) wf.click();     // 必须在用户手势里触发，setTimeout 之后会被拦
+        break;
+      }
+      case 'wall-import': {
+        var recent = loadRecentPhotos();
+        var ri = Number(el.getAttribute('data-i'));
+        if (!recent[ri]) { toast('这张已经不在本地了'); break; }
+        openWallComposer(recent[ri]);
+        break;
+      }
+      case 'wall-day': {
+        wallDay = el.getAttribute('data-d') === 'yesterday' ? 'yesterday' : 'today';
+        // 只换选中态，不重画面板（重画会把已经选好的图弄丢）
+        var dayBtns = document.querySelectorAll('[data-act="wall-day"]');
+        for (var di = 0; di < dayBtns.length; di++) {
+          dayBtns[di].className = (dayBtns[di].getAttribute('data-d') === wallDay) ? 'on' : '';
+        }
+        break;
+      }
+      case 'wall-send':
+        sendWallPhoto();
+        break;
+      case 'wall-more':
+        loadMorePhotos();
+        break;
+      case 'wall-open':
+        openWallPhoto(el.getAttribute('data-id'));
+        break;
+      case 'wall-del':
+        deleteWallPhoto(Number(el.getAttribute('data-id')));
         break;
       case 'like': {
         var p = state.posts.filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
@@ -3883,6 +4181,7 @@
       case 'refresh-social':
         if (!serverOn() || !state.server.token) { toast('先登录服务器才能刷新'); break; }
         toast('正在刷新…');
+        if (state.feedTab === 'photos') { pullPhotoFeed(true); toast('已刷新'); break; }
         refreshSocial(true).then(function () { toast('已刷新'); }, function () { toast('刷新失败，网络好像不通'); });
         break;
       case 'add-friend': {
@@ -4333,6 +4632,18 @@
       openRateSheet: openRateSheet,
       openPhotoView: openPhotoView,
       savePhotoToFeed: savePhotoToFeed,
+      /* 照片墙：渲染 + 「最近拍的」本地缓存，测试用假数据直接断言 HTML */
+      photoWallHtml: photoWallHtml,
+      loadRecentPhotos: loadRecentPhotos,
+      pushRecentPhoto: pushRecentPhoto,
+      dropRecentPhoto: dropRecentPhoto,
+      setPhotoFeed: function (list, hasMore) {
+        photoFeed = list || [];
+        photoHasMore = !!hasMore;
+        photoFetchedAt = Date.now();
+      },
+      wallSend: function (img, cap, day) { wallImage = img || ''; wallDay = day || 'today'; sendWallPhoto(); },
+      getPhotoFeed: function () { return photoFeed; },
       view: function (v) { state.view = v; syncHash(); render(); },
       sheet: function (which, arg) {
         if (which === 'portion') beginEntry(arg || '鸡胸肉');

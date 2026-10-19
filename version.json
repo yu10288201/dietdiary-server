@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  1000012,
-                    "versionName":  "0.7.3",
+                    "versionCode":  1000013,
+                    "versionName":  "0.7.4",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "照片能存进动态给好友看（阿里云 OSS）；好友能给这顿饭打 1-5 星。",
+                    "notes":  "好友页新增「照片」分段：我和好友的照片按天分组铺成九宫格，点开看大图；发照片可以从识别时留下的「最近拍的」一键分享，也可以单独拍照上传",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-19T12:03:32Z",
+                    "publishedAt":  "2026-10-19T12:52:30Z",
                     "channel":  "stable",
-                    "sha256":  "df3b4a58962559f874c2344a034ae99dc0a92474a7a5d3153f6b09d2cf543a0f",
-                    "size":  165145
+                    "sha256":  "2aaba3331afabf7773833fcb834fc54004dc0b37cb40398119e46cd045d92321",
+                    "size":  169241
                 }
 }
