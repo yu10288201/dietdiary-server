@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import 'dotenv/config';
 
 import { all, get, initDb, run, dbUrl } from './db.js';
+import { visionRouter } from './vision.js';
 import {
   backfillUserUids,
   cleanupExpiredSessions,
@@ -32,6 +33,9 @@ const PORT = Number(process.env.PORT || 3000);
 const app = express();
 app.disable('x-powered-by');
 app.use(cors());                                  // App 直连，放开跨域
+// 拍照识别（/api/recognize）要收 base64 图片，自己在路由级挂了 4MB 的解析器，
+// 所以必须挂在下面这个全局 1MB 解析器之前；其它 /api 请求原样落到下一行。
+app.use('/api', visionRouter);
 app.use(express.json({ limit: '1mb' }));          // 动态体不大，1MB 足够
 
 // ---------------------------------------------------------------- 通用工具

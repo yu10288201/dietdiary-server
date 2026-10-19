@@ -110,6 +110,17 @@ const SCHEMA_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary(user_id, date)`,
   // 身体档案（身高体重/目标）和体重记录：一人一份，整块 JSON 存，按 updated_at 取新的
+  // 拍照识别的每日计数：一人一天一行。
+  // 为什么不放进程内存：Render 免费实例空闲十几分钟就休眠，一醒来内存清零，
+  // 限额等于没有。进库才能真正做到「每人每天 N 次」，重启/多实例都算同一本账。
+  // 主键 (user_id, date) 让它能用一句 UPSERT 原子地「占一次额度」。
+  `CREATE TABLE IF NOT EXISTS recognize_usage (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date       TEXT    NOT NULL,
+    n          INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, date)
+  )`,
   `CREATE TABLE IF NOT EXISTS user_profile (
     user_id    INTEGER NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     data_json  TEXT    NOT NULL DEFAULT '{}',

@@ -1,4 +1,4 @@
-# 饮食记录 · 社交功能后端（Express + Turso）
+﻿# 饮食记录 · 社交功能后端（Express + Turso）
 
 给「饮食记录」Android App 用的社交后端：注册登录、好友、每日动态 feed、点赞、评论、催更、App 版本检查。
 全部跑在**免费额度**上：数据库 **Turso**（libSQL，免费档 100 个库 / 共 5 GB 存储 / 每月 5 亿次行读、1000 万次行写），
@@ -151,6 +151,22 @@ git push -u origin main
    | `APK_NOTES` | 首个内测版本 |
    | `APK_FORCE` | `false` |
    | `APK_MIN_SUPPORTED` | `1` |
+   | `DASHSCOPE_API_KEY` | 拍照识别用的百炼 Key（**可先不填**，不填则识别接口返回 503，其它功能不受影响） |
+   | `VISION_MODEL` | `qwen3-vl-plus`（想省钱换 `qwen3-vl-flash`） |
+
+   拍照识别的其余可选项（都有默认值，不填也能跑）：
+
+   | Key | 默认 | 说明 |
+   |---|---|---|
+   | `BAILIAN_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 也可以用控制台给的专属地址 `https://<WorkspaceId>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`；末尾别带 `/chat/completions` |
+   | `RECOGNIZE_DAILY_LIMIT` | `5` | 每个账号每天最多识别几次。计数存 `recognize_usage` 表，重启不丢 |
+   | `RECOGNIZE_TZ_OFFSET_HOURS` | `8` | 「每天」按哪个时区清零，8 = 中国时间零点 |
+   | `RECOGNIZE_MAX_IMAGE_BYTES` | `4194304` | 单张图片上限（4 MB） |
+   | `RECOGNIZE_TIMEOUT_MS` | `45000` | 等模型的时间 |
+   | `RECOGNIZE_MOCK` | 不设 | 设成 `1` 返回一份假数据，链路照走，用来演示/测试；设成 `empty` 返回空结果，专用于测试「没结果就退额度」 |
+
+   > ⚠️ `DASHSCOPE_API_KEY` 是按**地域**绑定的：用北京地址就得用北京地域建的 Key，
+   > 否则报 401 `invalid_api_key`。Key 只放在这里（Render 环境变量），**绝不能进 App**。
 
    **不要**自己设 `PORT` —— Render 会自动注入，代码里读的就是 `process.env.PORT`。
 
@@ -267,6 +283,77 @@ App 端建议：
 | GET | `/api/cheers` | 是 | 我收到的催更列表（最近 50 条），每项含 `from:{id,username,displayName,avatarColor}` |
 | GET | `/api/version?platform=android` | **否** | 启动检查更新 |
 | GET | `/api/health`（别名 `/healthz`） | 否 | `{ok:true, db:"connected"\|"error"}`，会真 ping 一次数据库 |
+| GET | `/api/recognize/status` | 是 | `{ok,enabled,mock,model,remainingToday,dailyLimit}`，App 用它决定是否显示入口 |
+| POST | `/api/recognize` | 是 | `{image:"data:image/jpeg;base64,..." \| 纯base64, meal?, clientId?}` → `{ok,items:[...],remainingToday,dailyLimit,cached?,refunded?,elapsedMs}` |
+
+### 拍照识别接口
+
+模型只负责「认菜 + 估克数 + 给一份粗营养」，最终数值由 App 用本地食物库覆盖，
+库里没有的才用模型给的值并标「AI 估算」。
+
+```json
+// POST /api/recognize  请求
+// meal 可省；给了就会在提示词里补一句「这是用户的早餐/夜宵」，估重更靠谱
+// clientId 可省；给了就有幂等保护（见下）
+{ "image": "data:image/jpeg;base64,/9j/4AAQ...", "meal": "lunch", "clientId": "m1x2y3z4" }
+
+// 200
+{
+  "ok": true,
+  "items": [
+    { "name": "番茄炒蛋", "grams": 180, "kcal100": 120,
+      "protein100": 6, "fat100": 8, "carbs100": 6, "confidence": "high" }
+  ],
+  "remainingToday": 4,
+  "elapsedMs": 3120
+}
+```
+
+响应里可能多出两个字段：
+
+| 字段 | 什么时候出现 | 意思 |
+|---|---|---|
+| `cached: true` | 同一个 `clientId` 在 90 秒内重复提交 | 这是上次那份结果，**没有扣次数、没有调模型** |
+| `refunded: true` | `items` 是空数组（一条都没认出来） | 这次不算数，额度已经加回去了 |
+
+出错时的状态码：`400` 没图/格式不对、`401` 未登录、`413` 图片过大、`415` 不是
+JPEG/PNG/WebP（HEIC 要先转）、`429` 当天次数用完（每人每天默认 5 次，中国时间零点重置）、
+`502` 模型返回看不懂、`503` 服务器没配 `DASHSCOPE_API_KEY`。
+
+### 幂等（重发不会重复扣）
+
+手机信号差的时候，「服务端算完了、回包丢了」是常态。客户端那边看起来就是超时，
+用户再点一次、或者 `api.js` 自动重发一次 —— 没有幂等键的话，这顿饭扣两次次数、
+模型也白调一次。
+
+做法：客户端每次识别带一个随机 `clientId`（`api.js` 的 `recognize()` 会把它转成
+`idempotent: true`，允许 POST 失败重发一次）。服务端在内存里记 90 秒，
+同一个 `userId:clientId` 再来就把上次的回包原样吐回去。
+
+> 只放内存：进程重启就没了 —— 但重启后本来也没有「刚发出去的那次」在等着重试。
+> 不带 `clientId` 的老客户端照旧工作，只是没有这层保护。
+
+### 数字体检（Atwater 自洽）
+
+模型最容易犯的错不是数字越界，而是「热量和宏量各编一套」：300 kcal 配
+30 g 蛋白 + 20 g 脂肪 + 40 g 碳水，每个数单看都合法，合起来是 460 kcal。
+
+服务端按 `蛋白×4 + 脂肪×9 + 碳水×4` 算一遍，和模型给的热量差超过 30% 就以宏量为准，
+`confidence` 降成 `low`，`note` 里写明「N 条的热量和营养对不上，已重算」。
+名字里带酒（啤酒/白酒/清酒…）的跳过 —— 酒精 7 kcal/g 不在 Atwater 公式里，
+硬套会把啤酒从 43 kcal 改成 15。
+
+单元测试：`cd tools/.devtest; node nutrition-check.mjs`（21 条）。
+
+> 限额的计数在 `recognize_usage` 表里（一人一天一行），不是进程内存 ——
+> Render 免费实例一休眠内存就清空，那样限额等于没有。
+> 只有真的拿到结果才扣次数；超时、报错、返回的不是 JSON 都会把这次额度退回去。
+
+> 计费按图片 token 算（不是 Search 计费）：一张压到 896px 的图约 1000 token 上下，
+> 用 `qwen3-vl-plus` 大概 ¥0.002–0.005/张；300 元券够跑几万张。
+
+> 「吃了多少 / 花了多少钱 / 备注」这三样只存在 App 本地和用户自己的日记里，
+> 服务端不参与计算，也不进模型提示词 —— 热量是按「份量 × 吃了多少」在前端算的。
 
 ### feed 返回结构
 
