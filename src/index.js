@@ -720,18 +720,33 @@ app.post('/api/posts', requireAuth, h(async (req, res) => {
   );
   const now = Date.now();
 
-  // 同一天再发一次 = 覆盖：先删旧的（级联清掉赞和评论），再插新的
-  await run('DELETE FROM posts WHERE user_id = ? AND date = ?', [req.user.id, date]);
-  const result = await run(
-    `INSERT INTO posts (user_id, date, goal_text, meals_json, totals_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.user.id, date, goalText, JSON.stringify(meals), JSON.stringify(totals), now, now]
-  );
+  // 同一天再发一次 = 就地更新原来那条，**绝对不能删了重插**。
+  // 曾经这里写的是 DELETE + INSERT，后果是每发一次动态就换一个新的 post id，
+  // 而 likes / comments 都带 ON DELETE CASCADE —— 好友点的赞、写的评论全被级联删掉。
+  // App 每次改今天的饮食都会后台重发一次动态，所以表现为「点赞评论过一会就不见了，
+  // 对方刷新也看不到」。posts 本来就有 UNIQUE(user_id, date)，UPDATE 才能让 id 稳定。
+  const existing = await get('SELECT id FROM posts WHERE user_id = ? AND date = ?', [req.user.id, date]);
+  const now2 = now;
+  let postId;
+  if (existing) {
+    await run(
+      `UPDATE posts SET goal_text = ?, meals_json = ?, totals_json = ?, updated_at = ? WHERE id = ?`,
+      [goalText, JSON.stringify(meals), JSON.stringify(totals), now2, Number(existing.id)]
+    );
+    postId = Number(existing.id);
+  } else {
+    const result = await run(
+      `INSERT INTO posts (user_id, date, goal_text, meals_json, totals_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.id, date, goalText, JSON.stringify(meals), JSON.stringify(totals), now, now]
+    );
+    postId = Number(result.lastInsertRowid);
+  }
 
   // 用 shapePosts 统一形状，照片和打分也一起带上（发布后立刻能看到自己当天的图）
-  const row = await get('SELECT * FROM posts WHERE id = ?', [result.lastInsertRowid]);
+  const row = await get('SELECT * FROM posts WHERE id = ?', [postId]);
   const [post] = await shapePosts(req.user.id, [row]);
-  res.status(201).json({ post });
+  res.status(existing ? 200 : 201).json({ post });
 }));
 
 // 删掉自己某天的动态
