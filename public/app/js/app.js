@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.7.2';
-  var APP_VERSION_CODE = 1000011;
+  var APP_VERSION = '0.7.3';
+  var APP_VERSION_CODE = 1000012;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -1103,10 +1103,12 @@
     var rows = mealSummary(p);
     html += rows;
     html += '</div>';
+    if (p.photos && p.photos.length) html += photoStrip(p.photos);
 
     html += '<div class="feed-actions">' +
       '<button class="' + (p.likedByMe ? 'on' : '') + '" data-act="like" data-id="' + p.id + '">' + svg('heart') + (p.likedByMe ? '已赞' : '点赞') + ' ' + p.likes + '</button>' +
       '<button class="' + (open ? 'on' : '') + '" data-act="toggle-comments" data-id="' + p.id + '">' + svg('comment') + '评论 ' + p.comments.length + '</button>' +
+      rateButton(p) +
       '<button data-act="cheer" data-id="' + p.id + '">' + svg('check') + '催更</button>' +
       '</div>';
 
@@ -1123,6 +1125,63 @@
     }
     html += '</div>';
     return html;
+  }
+
+  /* 动态里的照片：最多铺 3 张，多的用「+N」收起来，点开看大图。
+     不用 <a>，因为 WebView 里点链接会把页面顶走；统一走 data-act。 */
+  function photoStrip(list) {
+    var out = '<div class="feed-photos">';
+    var show = Math.min(list.length, 3);
+    for (var i = 0; i < show; i++) {
+      var ph = list[i] || {};
+      out += '<button class="feed-photo" data-act="open-photo" data-url="' + esc(ph.url || '') +
+        '" data-cap="' + esc(ph.caption || '') + '">' +
+        (ph.url ? '<img src="' + esc(ph.url) + '" alt="">' : '<span class="small muted">图片没存上</span>') +
+        '</button>';
+    }
+    if (list.length > show) {
+      var rest = list[show] || {};
+      out += '<button class="feed-photo more" data-act="open-photo" data-url="' + esc(rest.url || '') +
+        '" data-cap="' + esc(rest.caption || '') + '">+' + (list.length - show) + '</button>';
+    }
+    out += '</div>';
+    return out;
+  }
+
+  function rateButton(p) {
+    var r = p.rating || { avg: 0, count: 0, mine: 0 };
+    var label;
+    if (r.mine) label = r.mine + ' 星';
+    else if (r.count) label = r.avg + ' 分';
+    else label = '打分';
+    return '<button class="' + (r.mine ? 'on' : '') + '" data-act="rate" data-id="' + p.id + '">' +
+      svg('star') + label + (r.count > 1 ? '（' + r.count + '）' : '') + '</button>';
+  }
+
+  function openRateSheet(p) {
+    var r = p.rating || { avg: 0, count: 0, mine: 0 };
+    var body = '<div class="field"><label>给 ' + esc(p.name) + ' 这顿饭打分</label>' +
+      '<div class="quick">';
+    for (var s = 1; s <= 5; s++) {
+      var on = r.mine >= s;
+      body += '<button data-act="rate-set" data-id="' + p.id + '" data-s="' + s + '" class="' + (on ? 'on' : '') + '"' +
+        (on ? ' style="background:var(--brand);color:var(--brand-ink);border-color:var(--brand)"' : '') +
+        '>' + s + ' 星</button>';
+    }
+    body += '</div><div class="small muted mt8">' +
+      (r.count ? '现在平均 ' + r.avg + ' 分（' + r.count + ' 人打过分）' : '还没有人打分') +
+      '。打分只看照片和这三餐，不参与热量计算。</div></div>';
+    if (r.mine) {
+      body += '<div class="field"><button class="btn ghost" data-act="rate-set" data-id="' + p.id + '" data-s="0">取消我的打分</button></div>';
+    }
+    openSheet('打分', body, '<button class="btn ghost" data-act="cancel">关闭</button>');
+  }
+
+  function openPhotoView(url, caption) {
+    if (!url) { toast('这张图没存下来'); return; }
+    openSheet('照片', '<div class="photo-full"><img src="' + esc(url) + '" alt=""></div>' +
+      (caption ? '<div class="small muted mt8">' + esc(caption) + '</div>' : ''),
+      '<button class="btn ghost" data-act="cancel">关闭</button>');
   }
 
   function mealSummary(p) {
@@ -1893,6 +1952,11 @@
         (picker.meal === m.id ? 'on' : '') + '" style="' + (picker.meal === m.id ? 'background:var(--brand);color:var(--brand-ink);border-color:var(--brand)' : '') + '">' +
         m.emoji + m.name + '</button>'; }).join('') +
       '</div></div>' +
+      '<div class="field"><label>顺手存到动态</label>' +
+      '<div class="small muted">把这张照片存进今天的记录，好友在动态里能看到、点赞、打分。' +
+      '不愿意给看不点就行，识别结果照样能记。</div>' +
+      '<button class="btn ghost mt8" data-act="recog-photo">' +
+      (photoBusy ? '正在上传…' : '📷 存到今天的动态') + '</button></div>' +
       '<div class="field"><button class="btn" data-act="recog-all">全部加进' + mealName(picker.meal) + '</button></div>';
   }
 
@@ -2154,6 +2218,7 @@
 
   function sendRecognize(small, out) {
     recogPending = null;
+    photoSaved = false;
     out.innerHTML = '<div class="recog-photo"><img src="' + small + '" alt=""></div>' +
       '<div class="field"><div class="small muted">识别中… 大模型看图一般 3–10 秒</div></div>';
     var t0 = Date.now();
@@ -2171,7 +2236,7 @@
       }
       savePendingPhoto('');
       var data = r.data || {};
-      recogOut = { items: data.items || [], note: data.note || '', model: data.model || '' };
+      recogOut = { items: data.items || [], note: data.note || '', model: data.model || '', small: small };
       out.innerHTML = recogListHtml(recogOut, Math.round((Date.now() - t0) / 1000));
       var q = $('#recog-quota');
       if (q && data.remainingToday !== undefined) {
@@ -2199,6 +2264,61 @@
     closeSheet();
     render();
     toast('已加 ' + n + ' 样到' + mealName(meal));
+  }
+
+  /* 把刚识别用的那张图存进「今天的动态」。
+   * 传的就是压过的 896px 版本（150 KB 上下），不用再压一遍；
+   * 服务端存到 OSS，数据库里只留一行「谁、哪天、哪一餐、哪个 key」。
+   * 照片和记录是两条独立的线：不传照片照样能记这条饭。 */
+  var photoBusy = false;
+  var photoSaved = false;
+
+  function savePhotoToFeed(small) {
+    if (!small) { toast('没有可存的照片'); return; }
+    if (!serverOn() || !state.server.token) { toast('先在设置里连上服务器才能存照片'); return; }
+    if (photoBusy) { toast('上一张还在传，稍等一下'); return; }
+    photoBusy = true;
+    var caption = '';
+    if (recogOut && recogOut.items && recogOut.items.length) {
+      var names = [];
+      for (var i = 0; i < recogOut.items.length && i < 4; i++) names.push(recogOut.items[i].name);
+      caption = names.join('、') + (recogOut.items.length > 4 ? ' 等' : '');
+    }
+    if (recogOut) recogOut.photoBusy = true;
+    setRecogPhotoLabel();
+    api.uploadPhoto(serverCfg(), {
+      image: small,
+      date: state.date,
+      meal: picker.meal,
+      caption: caption,
+      clientId: newClientId()
+    }).then(function (r) {
+      photoBusy = false;
+      if (recogOut) recogOut.photoBusy = false;
+      setRecogPhotoLabel();
+      if (r.error) {
+        var msg = r.status === 503 ? '服务器还没开照片存储（见 README 的「照片存储」一节）'
+          : r.status === 413 ? '这张图太大了'
+          : r.status === 429 ? '今天的照片数量用完了'
+          : '没存上，稍后再试';
+        toast(msg);
+        return;
+      }
+      toast('照片已存进今天的记录');
+      photoSaved = true;
+      setRecogPhotoLabel();
+      /* 动态页按「今天」拉一次，让刚存的图马上出现在自己那条里 */
+      if (typeof pullFeed === 'function') pullFeed(true, true);
+    });
+  }
+
+  /* 上传中/已上传只改按钮上的字，别整块重绘（会把「加到哪一餐」的选中态清掉） */
+  function setRecogPhotoLabel() {
+    var btn = $('[data-act="recog-photo"]');
+    if (!btn) return;
+    if (photoBusy) btn.textContent = '正在上传…';
+    else if (photoSaved) { btn.textContent = '✓ 已存到今天的动态'; btn.disabled = true; }
+    else btn.textContent = '📷 存到今天的动态';
   }
 
   /* ------------------------------------------------------- custom food */
@@ -2612,6 +2732,8 @@
       seq: p.id,
       total: (p.totals && p.totals.kcal) || 0,
       entries: flat,
+      photos: p.photos || [],
+      rating: p.rating || { avg: 0, count: 0, mine: 0 },
       likes: p.likes || 0,
       likedByMe: !!p.likedByMe,
       comments: (p.comments || []).map(function (c) {
@@ -3722,6 +3844,39 @@
         }
         break;
       }
+      case 'rate': {
+        var rp = state.posts.filter(function (x) { return x.id === el.getAttribute('data-id'); })[0];
+        if (!rp) break;
+        openRateSheet(rp);
+        break;
+      }
+      case 'rate-set': {
+        var rsid = el.getAttribute('data-id');
+        var stars = Number(el.getAttribute('data-s')) || 0;
+        var tp = state.posts.filter(function (x) { return x.id === rsid; })[0];
+        if (!tp) break;
+        if (!tp.serverId || !serverOn() || !state.server.token) {
+          tp.rating = { avg: stars || 0, count: stars ? 1 : 0, mine: stars };
+          closeSheet(); render();
+          toast(stars ? '已打 ' + stars + ' 星（本机演示）' : '已取消打分');
+          break;
+        }
+        api.ratePost(serverCfg(), tp.serverId, stars).then(function (res) {
+          if (res && res.error) { toast(res.error); return; }
+          var rr = res && res.data && res.data.rating;
+          if (rr) tp.rating = rr;
+          closeSheet();
+          render();
+          toast(stars ? '已打 ' + stars + ' 星' : '已取消打分');
+        });
+        break;
+      }
+      case 'open-photo':
+        openPhotoView(el.getAttribute('data-url'), el.getAttribute('data-cap'));
+        break;
+      case 'recog-photo':
+        savePhotoToFeed(recogOut && recogOut.small);
+        break;
       case 'open-friend':
         openFriend(el.getAttribute('data-id'));
         break;
@@ -4161,6 +4316,7 @@
       aiDraft: aiDraft,
       /* 出错了怎么提示、以及「断网时把图存下来」这条退路，也要能被测到 */
       recogErrHtml: recogErrHtml,
+      recogListHtml: recogListHtml,
       sendRecognize: sendRecognize,
       loadPendingPhoto: loadPendingPhoto,
       /* B 需求（备注/价格/吃了多少）与 A 组（EXIF/清晰度）的纯函数，给 jsdom 测试用 */
@@ -4171,6 +4327,12 @@
       monthSpendText: monthSpendText,
       exifOrientation: exifOrientation,
       qualityHint: qualityHint,
+      /* 动态里的照片与打分：渲染函数和上传入口都单独暴露，免得测试去摸真实网络 */
+      photoStrip: photoStrip,
+      rateButton: rateButton,
+      openRateSheet: openRateSheet,
+      openPhotoView: openPhotoView,
+      savePhotoToFeed: savePhotoToFeed,
       view: function (v) { state.view = v; syncHash(); render(); },
       sheet: function (which, arg) {
         if (which === 'portion') beginEntry(arg || '鸡胸肉');

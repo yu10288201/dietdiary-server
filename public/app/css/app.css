@@ -700,3 +700,29 @@ body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
   font-size: 11.5px; color: var(--text-3); margin-top: 1px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ------------------------------------------------------------ 动态里的照片
+ * 三张一排，固定 4:3 裁切，点了看大图。
+ * 用 button 而不是 a：WebView 里点 a 会把页面顶走。
+ * ---------------------------------------------------------------------- */
+.feed-photos {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 6px; margin-top: 8px;
+}
+.feed-photo {
+  display: block; padding: 0; border: 0; background: var(--surface-2);
+  border-radius: var(--radius-sm); overflow: hidden; cursor: pointer;
+  aspect-ratio: 4 / 3; position: relative;
+}
+.feed-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.feed-photo.more {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 600; color: var(--text-2);
+  background: var(--surface-2);
+}
+
+/* 看大图：竖屏也尽量铺满，但别超出可视区 */
+.photo-full img {
+  width: 100%; max-height: 62vh; object-fit: contain;
+  border-radius: var(--radius); background: var(--surface-2); display: block;
+}

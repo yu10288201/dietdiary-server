@@ -109,6 +109,20 @@
       return { data: { date: dstr, posts: posts } };
     }
     if (/\/api\/posts\/\d+\/like$/.test(path)) return { data: { liked: true, likes: 6 } };
+    if (/\/api\/posts\/\d+\/rate$/.test(path)) {
+      var stars = Number((opts.body && opts.body.stars) || 0);
+      return { data: { rating: { avg: stars ? 4.5 : 4, count: stars ? 2 : 1, mine: stars } } };
+    }
+    // 对象存储：演示模式下说「开着」，让上传这条路径也能走通
+    if (path.indexOf('/api/storage/status') === 0) {
+      return { data: { ok: true, enabled: true, ready: true, bucket: 'demo', endpoint: 'demo', private: false, hasKey: true, dailyLimit: 30, usedToday: 0 } };
+    }
+    if (path.indexOf('/api/photos') === 0) {
+      var cap = (opts.body && opts.body.caption) || '';
+      var w = (opts.body && opts.body.width) || 0;
+      var h = (opts.body && opts.body.height) || 0;
+      return { data: { ok: true, photo: { id: Date.now(), date: dstr, meal: (opts.body && opts.body.meal) || 'lunch', url: '', width: w, height: h, bytes: 0, caption: cap, createdAt: Date.now() } } };
+    }
     if (/\/api\/posts\/\d+\/comments$/.test(path)) {
       return { data: { comment: { id: 99, displayName: '我', text: (opts.body && opts.body.text) || '', createdAt: Date.now() } } };
     }
@@ -311,6 +325,38 @@
 
     cheer: function (cfg, postId) {
       return request(cfg, '/api/posts/' + encodeURIComponent(postId) + '/cheer', { method: 'POST' });
+    },
+
+    /** 给好友这顿饭打分：1–5 星，0 = 取消 */
+    ratePost: function (cfg, postId, stars) {
+      return request(cfg, '/api/posts/' + encodeURIComponent(postId) + '/rate', {
+        method: 'POST',
+        body: { stars: stars }
+      });
+    },
+
+    /** 对象存储开没开 + 今天已经传了几张 */
+    storageStatus: function (cfg) {
+      return request(cfg, '/api/storage/status', { timeout: 20000 });
+    },
+
+    /** 上传一张照片（data URL）。图片会先到自己的后端，再由后端签名转存 OSS。 */
+    uploadPhoto: function (cfg, payload) {
+      return request(cfg, '/api/photos', {
+        method: 'POST',
+        body: payload,
+        timeout: 60000,
+        idempotent: !!(payload && payload.clientId)
+      });
+    },
+
+    /** 我某天已经存了哪些照片 */
+    photosOfDay: function (cfg, date) {
+      return request(cfg, '/api/photos?date=' + encodeURIComponent(date || ''), { timeout: 30000 });
+    },
+
+    deletePhoto: function (cfg, id) {
+      return request(cfg, '/api/photos/' + encodeURIComponent(id), { method: 'DELETE' });
     },
 
     cheers: function (cfg) { return request(cfg, '/api/cheers'); },
