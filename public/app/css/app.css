@@ -737,33 +737,40 @@ body.dark .recog-tag.ai { background: rgba(242,153,74,.22); color: #F2A96B; }
   cursor: pointer; box-shadow: var(--shadow);
 }
 .wall-recent-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.wall-day { margin-bottom: 14px; }
-.wall-day-head { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 10px 2px 7px; }
-.wall-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-.wall-tile {
-  position: relative; padding: 0 0 100% 0; height: 0; border: 0; background: var(--surface-2);
-  border-radius: var(--radius-sm); overflow: hidden;
-  cursor: pointer; display: block;
+
+/* 一条照片 = 一个人 + 时间 + 文案 + 一张图（v0.7.7 起不再按天铺九宫格） */
+.wall-card { padding: 13px 13px 6px; }
+.wall-top { display: flex; align-items: center; gap: 9px; }
+.wall-av {
+  width: 36px; height: 36px; border-radius: 50%; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 14px; font-weight: 600;
 }
-.wall-tile img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
-.wall-who {
-  position: absolute; left: 4px; bottom: 4px; max-width: calc(100% - 8px);
-  font-size: 10px; line-height: 1.2; padding: 2px 5px; border-radius: 6px;
-  color: #fff; background: rgba(0, 0, 0, .45);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.wall-who { min-width: 0; }
+.wall-nm { font-size: 14.5px; font-weight: 600; line-height: 1.2; }
+.wall-tm { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+.wall-cap { font-size: 14px; line-height: 1.5; margin: 9px 1px 9px; color: var(--text); word-break: break-word; }
+.wall-shot {
+  display: block; width: 100%; padding: 0; border: 0; cursor: pointer;
+  border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2);
+  max-height: 62vh;
 }
-body.dark .wall-tile, body.dark .wall-recent-item { background: var(--surface-2); }
+.wall-shot img { width: 100%; display: block; max-height: 62vh; object-fit: cover; }
+/* 三个动作：图标 + 数字，三等分。以前带中文标签，390px 下会折成两行 */
+.wall-acts, .feed-actions { display: flex; align-items: center; }
+.wall-acts { margin-top: 6px; }
+.wall-acts button {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 38px; border: 0; background: none; cursor: pointer; border-radius: 10px;
+  font-size: 13px; color: var(--text-2); font-family: inherit;
+}
+.wall-acts button:active { background: var(--surface-2); }
+.wall-acts button.on { color: var(--brand); }
+.wall-acts .n, .feed-actions .n { font-size: 13px; font-variant-numeric: tabular-nums; }
+.wall-acts svg, .feed-actions svg { width: 17px; height: 17px; }
+body.dark .wall-recent-item, body.dark .wall-shot { background: var(--surface-2); }
 
 /* ---------------------------------------------------- 照片详情 / 互动（0.7.6） */
-/* 缩略格上的互动角标：只放数字，不抢图 */
-.wall-badges {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  display: flex; gap: 5px; padding: 4px 6px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, .45));
-  font-size: 10.5px; color: #fff; line-height: 1;
-}
-.wall-badge { white-space: nowrap; }
-
 .photo-meta { font-size: 12.5px; color: var(--text-2); margin-top: 10px; }
 .photo-cap { font-size: 14.5px; color: var(--text); margin-top: 6px; line-height: 1.45; }
 .photo-cap.empty { font-size: 12.5px; color: var(--text-3); }

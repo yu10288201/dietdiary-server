@@ -136,9 +136,14 @@ const SCHEMA_STATEMENTS = [
     width      INTEGER NOT NULL DEFAULT 0,
     height     INTEGER NOT NULL DEFAULT 0,
     caption    TEXT    NOT NULL DEFAULT '',
+    source     TEXT    NOT NULL DEFAULT 'wall',
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_photos_user_date ON photos(user_id, date)`,
+  // v0.7.7：照片分两个来源。'meal' = 记这顿饭时在识别面板里存的（会挂到当天的动态上），
+  // 'wall' = 在照片页单独发的（只在照片页出现，不进动态）。老照片没有这一列，
+  // ALTER 补上以后默认值就是 'wall' —— 也就是老图只留在照片页。
+  `ALTER TABLE photos ADD COLUMN source TEXT NOT NULL DEFAULT 'wall'`,
   // 照片的点赞 / 评论 / 打分（v0.7.6，照片从「只能看」变成「能互动」）。
   // 用 photo_id 而不是 (作者, 日期)：照片是个独立的实体，删了就是删了，
   // 没有「重新发布」这回事，所以级联删除正是想要的行为。

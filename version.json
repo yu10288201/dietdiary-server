@@ -1,15 +1,15 @@
 {
     "_comment":  "App 更新清单。这是「最新版本」的权威来源：改这个文件 -\u003e git push -\u003e Render 自动重新部署 -\u003e App 下次检查更新就能看到。通常不用手改，跑 tools\\release.ps1 会自动写入并提交。url 指向仓库里的静态安装包，永远不变。",
     "android":  {
-                    "versionCode":  1000015,
-                    "versionName":  "0.7.6",
+                    "versionCode":  1000016,
+                    "versionName":  "0.7.7",
                     "url":  "https://raw.githubusercontent.com/yu10288201/dietdiary-server/main/public/shike.apk",
-                    "notes":  "照片能点赞、打分、评论了，文案发出去还能改；修了某些手机拍完照传不上去的问题",
+                    "notes":  "照片页改成朋友圈那样：一条一条、带时间、点开能打分和评论；动态里只挂每顿饭的图；动作条只剩图标和数字。",
                     "force":  false,
                     "minSupported":  1,
-                    "publishedAt":  "2026-10-19T14:36:08Z",
+                    "publishedAt":  "2026-10-19T15:21:24Z",
                     "channel":  "stable",
-                    "sha256":  "f0e2265c9eb931481c80ed087f77cfa0a6ac0d12266a26ab0bb014c3437ebf1a",
-                    "size":  173337
+                    "sha256":  "5534fc2d69a0953bc72e5590678a63d8c78b8cc6ce3ab407be87df058d826d01",
+                    "size":  177433
                 }
 }

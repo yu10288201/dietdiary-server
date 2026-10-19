@@ -14,8 +14,8 @@
 
   var STORE_KEY = 'dietdiary.v1';
   var APP_NAME = '食刻';
-  var APP_VERSION = '0.7.6';
-  var APP_VERSION_CODE = 1000015;
+  var APP_VERSION = '0.7.7';
+  var APP_VERSION_CODE = 1000016;
   // 已部署的社交后端（Turso + Render）。填进「我的 → 社交服务器」即可用，
   // 不填也能用 App：所有记录都存在本机，社交只是额外能力。
   var DEFAULT_SERVER = 'https://shike-api.onrender.com';
@@ -1106,11 +1106,15 @@
     html += '</div>';
     if (p.photos && p.photos.length) html += photoStrip(p.photos);
 
+    /* 动作条只留图标 + 数字。以前是「♡ 点赞 3」，中文标签在 390px 宽下放不下，
+       会被折成两行（图标一行、数字一行），看着像坏了 —— 见 v0.7.7 的说明。 */
     html += '<div class="feed-actions">' +
-      '<button class="' + (p.likedByMe ? 'on' : '') + '" data-act="like" data-id="' + p.id + '">' + svg('heart') + (p.likedByMe ? '已赞' : '点赞') + ' ' + p.likes + '</button>' +
-      '<button class="' + (open ? 'on' : '') + '" data-act="toggle-comments" data-id="' + p.id + '">' + svg('comment') + '评论 ' + p.comments.length + '</button>' +
+      '<button class="' + (p.likedByMe ? 'on' : '') + '" data-act="like" data-id="' + p.id + '" aria-label="点赞">' +
+      svg('heart') + '<span class="n">' + p.likes + '</span></button>' +
+      '<button class="' + (open ? 'on' : '') + '" data-act="toggle-comments" data-id="' + p.id + '" aria-label="评论">' +
+      svg('comment') + '<span class="n">' + p.comments.length + '</span></button>' +
       rateButton(p) +
-      '<button data-act="cheer" data-id="' + p.id + '">' + svg('check') + '催更</button>' +
+      '<button data-act="cheer" data-id="' + p.id + '" aria-label="催更">' + svg('check') + '</button>' +
       '</div>';
 
     if (open) {
@@ -1149,14 +1153,16 @@
     return out;
   }
 
+  /* 打分按钮也只露图标 + 数字：我打过就显示我的星数，没打过就显示均分，
+     一个分都没有时只留一颗空心星（文案交给 aria-label，别占宽度）。 */
   function rateButton(p) {
     var r = p.rating || { avg: 0, count: 0, mine: 0 };
-    var label;
-    if (r.mine) label = r.mine + ' 星';
-    else if (r.count) label = r.avg + ' 分';
-    else label = '打分';
-    return '<button class="' + (r.mine ? 'on' : '') + '" data-act="rate" data-id="' + p.id + '">' +
-      svg('star') + label + (r.count > 1 ? '（' + r.count + '）' : '') + '</button>';
+    var label = '';
+    if (Number(r.mine)) label = r.mine;
+    else if (Number(r.count)) label = r.avg;
+    return '<button class="' + (Number(r.mine) ? 'on' : '') + '" data-act="rate" data-id="' + p.id +
+      '" aria-label="给这顿饭打分">' + svg('star') +
+      (label !== '' ? '<span class="n">' + label + '</span>' : '') + '</button>';
   }
 
   function openRateSheet(p) {
@@ -2308,6 +2314,7 @@
       date: state.date,
       meal: picker.meal,
       caption: caption,
+      source: 'meal',
       clientId: newClientId()
     }).then(function (r) {
       photoBusy = false;
@@ -2417,34 +2424,10 @@
       return html;
     }
 
-    // 按日期分组，同一天的照片铺成三列
-    var byDate = {};
-    var order = [];
-    for (var j = 0; j < photoFeed.length; j++) {
-      var p = photoFeed[j];
-      var d = p.date || '';
-      if (!byDate[d]) { byDate[d] = []; order.push(d); }
-      byDate[d].push(p);
-    }
-    for (var k = 0; k < order.length; k++) {
-      var day = order[k];
-      var list = byDate[day];
-      html += '<div class="wall-day"><div class="wall-day-head">' + esc(prettyDate(day)) +
-        '<span class="small muted"> · ' + list.length + ' 张</span></div>' +
-        '<div class="wall-grid">';
-      for (var m = 0; m < list.length; m++) {
-        var ph = list[m];
-        var badges = '';
-        if (Number(ph.likes)) badges += '<span class="wall-badge">❤️ ' + ph.likes + '</span>';
-        if (Number(ph.commentCount)) badges += '<span class="wall-badge">💬 ' + ph.commentCount + '</span>';
-        else if (ph.rating && Number(ph.rating.count)) badges += '<span class="wall-badge">★ ' + ph.rating.avg + '</span>';
-        html += '<button class="wall-tile" data-act="wall-open" data-id="' + ph.id + '">' +
-          (ph.url ? '<img src="' + esc(ph.url) + '" alt="" loading="lazy">' : '<span class="small muted">图片没存上</span>') +
-          (ph.mine ? '' : '<span class="wall-who">' + esc((ph.author && ph.author.displayName) || '好友') + '</span>') +
-          (badges ? '<span class="wall-badges">' + badges + '</span>' : '') +
-          '</button>';
-      }
-      html += '</div></div>';
+    // 朋友圈式：一条 = 一个人 + 时间 + 文案 + 一张图，按时间倒序往下滚。
+    // 不再按天分组铺九宫格 —— 那样看不出谁发的、几点发的、说了什么。
+    for (var k = 0; k < photoFeed.length; k++) {
+      html += wallCardHtml(photoFeed[k]);
     }
 
     if (photoHasMore) {
@@ -2452,6 +2435,61 @@
         (photoLoading ? '正在加载…' : '看更早的') + '</button></div>';
     }
     return html;
+  }
+
+  /* ---------------------------------------------------------- 照片的一条（朋友圈式） */
+  function mealName(id) {
+    var list = (window.MEALS || []);
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i].name;
+    return '';
+  }
+
+  /* 12:04 —— createdAt 是毫秒时间戳；没有就留空，不猜。 */
+  function clockText(ms) {
+    var n = Number(ms);
+    if (!(n > 0)) return '';
+    var d = new Date(n);
+    var h = d.getHours();
+    var m = d.getMinutes();
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+
+  /* 「今天 12:04 · 午餐」——时间放在日期后面，和朋友圈一样一眼看到几点。 */
+  function wallWhenText(p) {
+    var out = prettyDate(p.date);
+    var t = clockText(p.createdAt);
+    if (t) out += ' ' + t;
+    var mn = mealName(p.meal);
+    if (mn) out += ' · ' + mn;
+    return out;
+  }
+
+  function wallCardHtml(p) {
+    var a = p.author || {};
+    var who = p.mine ? '我' : (a.displayName || '好友');
+    var letter = p.mine ? '我' : String(a.displayName || '友').slice(0, 1);
+    var seed = String(a.uid || a.displayName || p.id);
+    var likes = Number(p.likes) || 0;
+    var cmts = Number(p.commentCount) || 0;
+    var r = p.rating || {};
+    var out = '<div class="card wall-card">' +
+      '<div class="wall-top">' +
+      '<div class="wall-av" style="background:' + avatarColor(seed) + '">' + esc(letter) + '</div>' +
+      '<div class="wall-who"><div class="wall-nm">' + esc(who) + '</div>' +
+      '<div class="wall-tm">' + esc(wallWhenText(p)) + '</div></div></div>';
+    if (p.caption) out += '<div class="wall-cap">' + esc(p.caption) + '</div>';
+    out += '<button class="wall-shot" data-act="wall-open" data-id="' + p.id + '">' +
+      (p.url ? '<img src="' + esc(p.url) + '" alt="" loading="lazy">'
+        : '<span class="small muted">图片没存上</span>') + '</button>';
+    out += '<div class="wall-acts">' +
+      '<button class="' + (p.likedByMe ? 'on' : '') + '" data-act="wall-like" data-id="' + p.id + '">' +
+      svg('heart') + '<span class="n">' + likes + '</span></button>' +
+      '<button data-act="wall-open" data-id="' + p.id + '">' + svg('comment') +
+      '<span class="n">' + cmts + '</span></button>' +
+      '<button data-act="wall-open" data-id="' + p.id + '" aria-label="打分">' + svg('star') +
+      '<span class="n">' + (Number(r.count) ? r.avg : '') + '</span></button>' +
+      '</div></div>';
+    return out;
   }
 
   function pullPhotoFeed(force) {
@@ -2564,6 +2602,7 @@
       date: wallDate(),
       meal: picker.meal,
       caption: cap,
+      source: 'wall',
       clientId: newClientId()
     }).then(function (r) {
       wallBusy = false;
@@ -2635,15 +2674,15 @@
     var who = p.mine ? '我' : ((p.author && p.author.displayName) || '好友');
     var html = '';
     if (p.url) html += '<div class="photo-full"><img src="' + esc(p.url) + '" alt=""></div>';
-    html += '<div class="photo-meta">' + esc(who) + ' · ' + esc(prettyDate(p.date)) + '</div>';
+    html += '<div class="photo-meta">' + esc(who) + ' · ' + esc(wallWhenText(p)) + '</div>';
     if (p.caption) {
       html += '<div class="photo-cap">' + esc(p.caption) + '</div>';
     } else if (p.mine) {
       html += '<div class="photo-cap empty">还没写文案 —— 点「写点文案」补一句，好友才知道这是哪儿买的、多少钱。</div>';
     }
     html += '<div class="photo-acts">' +
-      '<button class="btn ghost small' + (p.likedByMe ? ' on' : '') + '" data-act="photo-like">' +
-      (p.likedByMe ? '❤️ 已赞 ' : '🤍 点赞 ') + (Number(p.likes) || 0) + '</button>' +
+      '<button class="btn ghost small' + (p.likedByMe ? ' on' : '') + '" data-act="photo-like" aria-label="点赞">' +
+      svg('heart') + '<span class="n">' + (Number(p.likes) || 0) + '</span></button>' +
       photoStarsHtml(p) + '</div>';
     if (p.mine) {
       html += '<div class="quick mt8">' +
@@ -2704,6 +2743,22 @@
       photoCur.photo.likedByMe = !!(r.data && r.data.liked);
       syncFeedPhoto(id, { likes: photoCur.photo.likes, likedByMe: photoCur.photo.likedByMe });
       renderPhotoDetail();
+    });
+  }
+
+  /* 列表里那颗心：不打开详情也能点赞（点开详情太绕了）。 */
+  function wallLike(id) {
+    var p = findFeedPhoto(id);
+    if (!p) return;
+    api.likePhoto(serverCfg(), id).then(function (r) {
+      if (r.error) { toast('点赞没成功：' + (r.error || '稍后再试')); return; }
+      p.likes = Number(r.data && r.data.likes) || 0;
+      p.likedByMe = !!(r.data && r.data.liked);
+      if (photoCur && Number(photoCur.photo.id) === Number(id)) {
+        photoCur.photo.likes = p.likes;
+        photoCur.photo.likedByMe = p.likedByMe;
+      }
+      if (state.view === 'social' && state.feedTab === 'photos') render();
     });
   }
 
@@ -4274,6 +4329,9 @@
       }
       case 'wall-send':
         sendWallPhoto();
+        break;
+      case 'wall-like':
+        wallLike(Number(el.getAttribute('data-id')));
         break;
       case 'wall-more':
         loadMorePhotos();

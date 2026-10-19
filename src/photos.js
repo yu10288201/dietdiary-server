@@ -1,4 +1,4 @@
-﻿// server/src/photos.js
+// server/src/photos.js
 // 饭菜照片：上传到阿里云 OSS，数据库只存「谁、哪天、哪一餐、对象 key、多大」。
 //
 // 为什么图片不存数据库：Turso 免费额度 5 GB，按一个用户一天 3 张、一张 150 KB 算，
@@ -91,6 +91,7 @@ function shapePhoto(row) {
     id: Number(row.id),
     date: row.date,
     meal: row.meal,
+    source: row.source === 'meal' ? 'meal' : 'wall',
     url: publicUrl(row.object_key),
     width: Number(row.width) || 0,
     height: Number(row.height) || 0,
@@ -126,6 +127,9 @@ router.post('/photos', requireAuth, h(async (req, res) => {
   if (!isValidDate(date)) throw new HttpError(400, 'date 需为 YYYY-MM-DD 格式');
   if (date > todayStr(1)) throw new HttpError(400, '不能给未来日期存照片');
   const meal = MEALS.includes(String(body.meal || '')) ? String(body.meal) : 'lunch';
+  // 来源决定这张图挂不挂到当天的动态上：
+  //   'meal' = 记这顿饭时存的（动态里能看到），'wall' = 照片页单独发的（只进照片页）
+  const source = String(body.source || '') === 'meal' ? 'meal' : 'wall';
   const caption = cleanString(body.caption, MAX_CAPTION);
   const width = Math.max(0, Math.min(12000, Math.round(Number(body.width) || 0)));
   const height = Math.max(0, Math.min(12000, Math.round(Number(body.height) || 0)));
@@ -149,9 +153,9 @@ router.post('/photos', requireAuth, h(async (req, res) => {
 
   const now = Date.now();
   const result = await run(
-    `INSERT INTO photos (user_id, date, meal, object_key, mime, bytes, width, height, caption, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [req.user.id, date, meal, key, mime, buf.length, width, height, caption, now]
+    `INSERT INTO photos (user_id, date, meal, object_key, mime, bytes, width, height, caption, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.id, date, meal, key, mime, buf.length, width, height, caption, source, now]
   );
 
   const row = await get('SELECT * FROM photos WHERE id = ?', [result.lastInsertRowid]);
@@ -448,6 +452,9 @@ async function decoratePhotos(rows, viewerId) {
 }
 
 /* 给 index.js 的 feed 用：按 (user_id, date) 批量取照片，一条 SQL 解决 */
+/* 给 index.js 的 feed 用：按 (user_id, date) 批量取照片，一条 SQL 解决。
+ * 只取 source = 'meal' 的那批 —— 动态卡片下面挂的应该是「这顿饭拍的照片」，
+ * 不是用户在照片页随手发的健身房自拍 / 表情包。 */
 export async function photosByOwners(pairs) {
   if (!pairs || !pairs.length) return new Map();
   const clauses = [];
@@ -457,7 +464,7 @@ export async function photosByOwners(pairs) {
     args.push(Number(p.userId), p.date);
   }
   const rows = await all(
-    `SELECT * FROM photos WHERE ${clauses.join(' OR ')} ORDER BY created_at ASC`,
+    `SELECT * FROM photos WHERE source = 'meal' AND ${clauses.join(' OR ')} ORDER BY created_at ASC`,
     args
   );
   const map = new Map();
